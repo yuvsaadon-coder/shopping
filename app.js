@@ -218,7 +218,7 @@ function listView() {
       <div class="row-btns"><button class="btn sm primary" data-verify="${o.id}">הגיע – בדיקה</button><button class="btn sm" data-remind="${o.id}">📅 תזכורת ביומן</button><button class="btn sm ghost" data-cancel-order="${o.id}">ביטול המשלוח</button></div></div>`;
   }).join('');
   if (S.mode === 'shop') return shopView(list) + ordersHtml;
-  if (!list.length) return `<section class="hero"><h1>הרשימה ריקה</h1><p>בוחרים מוצרים במסך "מה חסר"</p></section>${ordersHtml}<button class="btn primary wide" data-go="home">למסך מה חסר</button>`;
+  if (!list.length) return `<section class="hero"><h1>הרשימה ריקה</h1><p>בוחרים מוצרים במסך "מה חסר"</p></section>${ordersHtml}<button class="btn primary wide" data-go="home">למסך מה חסר</button><div class="row-btns">${scanButton('📷 קניתי – סריקת קבלה', 'sm', 'data-scan-free')}</div>`;
   const row = (i) => `<li>
       ${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.note || i.by || i.kind === 'once' ? `<small>${[i.kind === 'once' ? 'חד פעמי' : '', i.note, i.by ? 'הוסיף/ה: ' + i.by : ''].filter(Boolean).map(esc).join(' · ')}</small>` : ''}</span>
       <span class="qty"><button data-qty="${i.id}" data-d="-1" aria-label="פחות">−</button><b>${i.qty || 1}</b><button data-qty="${i.id}" data-d="1" aria-label="יותר">+</button></span>
@@ -226,7 +226,7 @@ function listView() {
     </li>`;
   return `<section class="hero"><h1>רשימת קניות</h1><p>${list.length} מוצרים</p></section>
     <div class="modes"><button class="mode" data-start-shop><span>🛒</span>אני בקניות</button><button class="mode" data-start-delivery><span>🚚</span>הזמנתי משלוח</button></div>
-    <div class="row-btns"><button class="btn sm" data-share>שליחה בווטסאפ</button><button class="btn sm" data-go="compare">איפה כדאי להזמין?</button></div>
+    <div class="row-btns"><button class="btn sm" data-share>שליחה בווטסאפ</button><button class="btn sm" data-go="compare">איפה כדאי להזמין?</button>${scanButton('📷 קניתי – סריקת קבלה', 'sm', 'data-scan-free')}</div>
     ${ordersHtml}${groupByStore(list, row)}
     <button class="btn ghost wide" data-clear>ניקוי כל הרשימה</button>`;
 }
@@ -247,7 +247,9 @@ function sheet(html, onClose) {
   dlg.innerHTML = `<form method="dialog" class="sheet">${html}</form>`;
   dlg.returnValue = '';
   dlg.onclose = () => { const f = $('form', dlg); onClose(dlg.returnValue, f); if ($('form', dlg) === f) dlg.innerHTML = ''; };
-  dlg.showModal();
+  const pick = $('input[data-scan-input]', dlg);
+  if (pick) pick.addEventListener('change', () => { if (!pick.files.length) return; $('form', dlg)._files = [...pick.files]; dlg.close('scan'); });
+  if (!dlg.open) dlg.showModal();
   return $('form', dlg);
 }
 function checkout() {
@@ -257,8 +259,10 @@ function checkout() {
     <p class="note">מה שמסומן יורד מהרשימה ונרשם כנקנה. אפשר להוריד סימון ממה שבסוף לא נקנה.</p>
     <ul class="list compact">${cart.map(i => `<li><label class="check"><input type="checkbox" name="b" value="${i.id}" checked><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.qty > 1 ? ` ×${i.qty}` : ''}</span></span></label></li>`).join('')}</ul>
     ${rest.length ? `<p class="note">נשארים ברשימה: ${rest.map(i => esc(i.name)).join(', ')}</p>` : ''}
+    ${scanButton('📷 צילום הקבלה – לזהות מה נקנה')}
     <div class="row-btns"><button class="btn primary" value="ok">אישור – קניתי</button><button class="btn" value="back">חזרה לקניות</button></div>`,
   (v, form) => {
+    if (v === 'scan') { runScan(form._files, { mode: 'shop', expect: cart.map(i => i.id) }); return; }
     if (v !== 'ok') return;
     const ids = [...form.querySelectorAll('input[name=b]:checked')].map(x => x.value);
     for (const id of ids) bought(id);
@@ -346,8 +350,10 @@ function verifyOrder(id) {
     <p class="note">מה הגיע כמו שהוזמן? מה שלא מסומן חוזר לרשימה.</p>
     <ul class="list compact">${its.map(i => `<li><label class="check"><input type="checkbox" name="v" value="${i.id}" checked><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${o.items[i.id] > 1 ? ` ×${o.items[i.id]}` : ''}</span></span></label></li>`).join('')}</ul>
     <label class="field">היו החלפות או שינויים? (רשות)<input name="changes" placeholder="למשל: הביאו טופו של מותג אחר"></label>
+    ${scanButton('📷 צילום הקבלה או המוצרים שהגיעו')}
     <div class="row-btns"><button class="btn primary" value="ok">אישור</button><button class="btn" value="later">אחר כך</button></div>`,
   (v, f) => {
+    if (v === 'scan') { runScan(f._files, { mode: 'order', orderId: id, expect: its.map(i => i.id) }); return; }
     if (v !== 'ok') return;
     const ok = new Set([...f.querySelectorAll('input[name=v]:checked')].map(x => x.value));
     for (const i of its) {
@@ -528,6 +534,103 @@ function linksTable(list) {
   return `<h2 class="cat">חיפוש ידני בכל רשת</h2><ul class="list links">${list.map(i => `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}</span><span class="lk">${CHAINS.map(c => `<a style="--c:${c.color}" href="${searchUrl(c, i)}" target="_blank" rel="noopener">${c.name}</a>`).join('')}</span></li>`).join('')}</ul>`;
 }
 
+
+// ---------- זיהוי מה נקנה מצילום קבלה או מוצרים ----------
+// Claude דרך השרת של "מה שנקרא" (אותו אתר, המפתח שמור שם). כשהשרת של הקניות יחובר אפשר להעביר לכאן.
+const AI_SERVER = 'https://books.yuvsaadon.workers.dev';
+const AI_MODEL = 'claude-opus-5';   // הדגם החזק ביותר שהשרת הזה מאפשר
+const SCAN_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['store', 'items'],
+  properties: {
+    store: { type: 'string' },
+    items: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['text', 'id', 'qty', 'price'],
+      properties: { text: { type: 'string' }, id: { type: 'string' }, qty: { type: 'number' }, price: { type: 'number' } } } }
+  }
+};
+function scanButton(label, size = '', attr = 'data-scan-input') {
+  return `<label class="btn ${size} scan-btn">${label}<input type="file" accept="image/*" multiple hidden ${attr}></label>`;
+}
+// מקטינים כל תמונה (עד 1600 פיקסלים, JPEG) כדי שהשליחה תהיה מהירה
+async function shrink(file) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+  const cv = document.createElement('canvas');
+  cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+  return cv.toDataURL('image/jpeg', 0.82).split(',')[1];
+}
+export function scanPrompt(products, expect) {
+  return `These photos show a supermarket receipt and/or grocery products that a family in Israel just bought (Hebrew; receipt lines are often abbreviated, e.g. "עגב שרי 250ג").
+Match every purchased line or visible product to the family's product list below, by id. Use id "" when nothing in the list is really that product (do not force a match).
+qty: how many units were bought (default 1). price: the line total in shekels if visible, else 0. text: the line as written (or the product's name if it's a photo of a product).
+store: the store or chain name if visible, else "".
+${expect.length ? `They expected to have bought: ${expect.map(id => S.items[id] && S.items[id].name).filter(Boolean).join(', ')}.\n` : ''}
+Product list (id: name):
+${products.map(i => `${i.id}: ${i.name}${i.q && i.q !== i.name ? ` (${i.q})` : ''}`).join('\n')}`;
+}
+async function runScan(files, opts) {
+  if (!files || !files.length) return;
+  sheet(`<h3>📷 מזהה מה נקנה…</h3><div class="dots"><i></i><i></i><i></i></div><p class="note">זה לוקח כמה שניות</p>
+    <div class="row-btns"><button class="btn ghost" value="cancel">ביטול</button></div>`, (v) => { if (v === 'cancel') opts.cancelled = true; });
+  let res = null, err = '';
+  try {
+    const images = await Promise.all(files.slice(0, 4).map(shrink));
+    const products = live();
+    const r = await fetch(AI_SERVER + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: AI_MODEL, max_tokens: 8000, output_config: { effort: 'medium', format: { type: 'json_schema', schema: SCAN_SCHEMA } },
+        messages: [{ role: 'user', content: [...images.map(data => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data } })), { type: 'text', text: scanPrompt(products, opts.expect) }] }] }) });
+    const msg = await r.json();
+    if (!r.ok) throw new Error((msg.error && msg.error.type) || r.status);
+    if (msg.stop_reason === 'refusal' || msg.stop_reason === 'max_tokens') throw new Error(msg.stop_reason);
+    res = JSON.parse((msg.content || []).filter(b => b.type === 'text').map(b => b.text).join(''));
+  } catch (e) { err = String(e.message || e); }
+  if (opts.cancelled) return;
+  if (!res) { const dlg = $('#sheet'); dlg.onclose = null; if (dlg.open) dlg.close(); dlg.innerHTML = ''; toast(err === 'daily_limit' ? 'הגענו למכסת הזיהויים היומית. אפשר לסמן ידנית' : 'הזיהוי לא הצליח. אפשר לנסות שוב או לסמן ידנית'); return; }
+  receiptSheet(res, opts);   // מחליף את חלון ההמתנה (בלי לסגור – אחרת אירוע הסגירה מגיע לחלון החדש)
+}
+// מה זוהה: מוצרים מהרשימה (מסומנים), מה שציפינו ולא נמצא (לא מסומן), ושורות שלא התאימו לאף מוצר
+function receiptSheet(res, opts) {
+  const found = new Map();
+  for (const x of res.items || []) {
+    if (!x.id || !S.items[x.id] || S.items[x.id].deleted) continue;
+    const f = found.get(x.id) || { qty: 0, price: 0 };
+    found.set(x.id, { qty: f.qty + (Number(x.qty) || 1), price: f.price + (Number(x.price) || 0) });
+  }
+  const missing = opts.expect.filter(id => !found.has(id));
+  const other = (res.items || []).filter(x => !x.id || !S.items[x.id]).map(x => x.text).filter(Boolean);
+  const row = (id, checked, tag) => { const i = S.items[id]; const f = found.get(id);
+    return `<li><label class="check"><input type="checkbox" name="r" value="${id}"${checked ? ' checked' : ''}><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${f && f.qty > 1 ? ` ×${f.qty}` : ''}${f && f.price ? ` · ${money(f.price)}` : ''}${tag ? `<small>${tag}</small>` : ''}</span></span></label></li>`; };
+  const title = opts.mode === 'order' ? 'מה הגיע במשלוח' : 'מה נקנה';
+  sheet(`<h3>🧾 ${title}${res.store ? ` · ${esc(res.store)}` : ''}</h3>
+    <p class="note">זה מה שזוהה. אפשר לתקן לפני האישור.</p>
+    <ul class="list compact">${[...found.keys()].map(id => row(id, true, opts.expect.length && !opts.expect.includes(id) ? (S.items[id].need ? 'מהרשימה' : 'לא היה ברשימה') : '')).join('')}
+      ${missing.map(id => row(id, false, opts.mode === 'order' ? 'לא זוהה – יחזור לרשימה' : 'לא זוהה בקבלה')).join('')}</ul>
+    ${other.length ? `<details><summary>שורות שלא התאימו למוצר ברשימה (${other.length})</summary><p class="note">${other.map(esc).join(' · ')}</p></details>` : ''}
+    <div class="row-btns"><button class="btn primary" value="ok">אישור</button><button class="btn" value="cancel">ביטול</button></div>`,
+  (v, f) => {
+    if (v !== 'ok') return;
+    const ok = new Set([...f.querySelectorAll('input[name=r]:checked')].map(x => x.value));
+    const when = opts.mode === 'order' && S.orders[opts.orderId] ? S.orders[opts.orderId].when : now();
+    for (const id of ok) {
+      const p = found.get(id);
+      bought(id, when);
+      if (p && p.price) S.items[id] = { ...S.items[id], prices: [...(S.items[id].prices || []), { v: Math.round(p.price / Math.max(1, p.qty) * 100) / 100, at: when, store: res.store || '' }].slice(-10), at: now() };
+    }
+    if (opts.mode === 'shop') {
+      for (const id of opts.expect) if (!ok.has(id) && S.items[id]) S.items[id] = { ...S.items[id], got: false, at: now() };
+      stopShop(false);
+    }
+    if (opts.mode === 'order') {
+      const o = S.orders[opts.orderId];
+      const back = opts.expect.filter(id => !ok.has(id) && S.items[id]);
+      for (const id of back) S.items[id] = { ...S.items[id], ordered: '', need: true, note: [S.items[id].note, 'לא הגיע במשלוח'].filter(Boolean).join(' · '), at: now() };
+      if (o) S.orders[o.id] = { ...o, status: 'done', missing: back, changes: '', at: now() };
+    }
+    save(); render();
+    toast(ok.size === 1 ? 'מוצר אחד נרשם כנקנה' : `${ok.size} מוצרים נרשמו כנקנו`);
+  });
+}
+
 // ---------- הגדרות ----------
 function settingsView() {
   const removed = Object.values(S.items).filter(i => i.deleted && i.kind !== 'once');
@@ -578,6 +681,7 @@ function openEditor(id, name = '') {
     <label class="field">מה לחפש באתרי הרשתות<input name="q" value="${esc(it.q || '')}" placeholder="${esc(it.name || 'למשל: חלב 3% 1 ליטר')}"></label>
     <label class="field">הערה<input name="note" value="${esc(it.note || '')}" placeholder="למשל: בלי גלעין, 1 ק״ג"></label>
     ${c ? `<p class="note">⏳ נקנה בערך כל ${c.every} ימים · לאחרונה לפני ${c.since} ימים</p>` : ''}
+    ${!isNew && it.prices && it.prices.length ? `<p class="note">🧾 ${it.prices.slice(-3).reverse().map(p => `${money(p.v)}${p.store ? ' ב' + esc(p.store) : ''} (${ago(p.at)})`).join(' · ')}</p>` : ''}
     <div class="row-btns"><button class="btn primary" value="save">שמירה</button><button class="btn" value="cancel" formnovalidate>ביטול</button>${!isNew ? '<button class="btn danger" value="delete" formnovalidate>מחיקה</button>' : ''}</div>
   </form>`;
   const form = $('form', dlg);
@@ -660,6 +764,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('change', (e) => {
   const t = e.target;
   if (t.closest('dialog')) return;
+  if (t.matches('[data-scan-free]') && t.files.length) { runScan([...t.files], { mode: 'free', expect: [] }); t.value = ''; return; }
   if (t.dataset.pref) { S.prefs[t.dataset.pref] = { name: t.value, at: now() }; save(); render(); }
   else if (t.dataset.fee) { const n = Number(t.value); S.fees[t.dataset.fee] = { value: Number.isFinite(n) && n >= 0 ? n : DEFAULT_FEE, at: now() }; save(); }
   else if (t.id === 'me') { store.set('shop-me', t.value.trim()); toast('נשמר'); }

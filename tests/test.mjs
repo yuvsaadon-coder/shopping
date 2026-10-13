@@ -111,7 +111,7 @@ const http = createServer(async (req, res) => {
 await new Promise(ok => http.listen(0, ok));
 const BASE = `http://localhost:${http.address().port}/shopping/`;
 
-const server = { list: null, compare: null, priceCalls: [], adviceCalls: [], adviceOff: false };
+const server = { scanCalls: [], list: null, compare: null, priceCalls: [], adviceCalls: [], adviceOff: false };
 const PRICES = {   // קרפור לא מוצאת ביצים
   'ביצים L': { shufersal: 30, rami: 26, hazi: 25 }, 'טופו': { shufersal: 12, rami: 10, carrefour: 11, hazi: 13 }, 'עגבניות שרי': { shufersal: 9, rami: 8, carrefour: 10, hazi: 9 }
 };
@@ -145,6 +145,14 @@ async function mock(ctx) {
       return route.fulfill({ json: { best_chain: 'rami', summary: 'ברמי לוי הסל הכי זול, גם עם המשלוח.', split: '', tips: ['כדאי לבדוק את מבצע הטופו בחצי חינם'], picks, at: Date.now() }, headers: h });
     }
     return route.fulfill({ status: 404, json: {}, headers: h });
+  });
+  await ctx.route('https://books.yuvsaadon.workers.dev/v1/messages', async (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    const b = JSON.parse(route.request().postData()); server.scanCalls.push(b);
+    const text = JSON.stringify({ store: 'רמי לוי', items: [
+      { text: 'ביצים L 12', id: 'eggs', qty: 2, price: 50 }, { text: 'חלב 3% 1ל', id: 'milk', qty: 1, price: 6.9 }, { text: 'שקית', id: '', qty: 1, price: 0.1 }, { text: 'בדוי', id: 'nope', qty: 1, price: 1 }] });
+    return route.fulfill({ json: { stop_reason: 'end_turn', content: [{ type: 'text', text }] }, headers: cors });
   });
   await ctx.route('https://img.example/**', r => r.fulfill({ body: PNG, contentType: 'image/png' }));
 }
@@ -298,6 +306,31 @@ await a.getByRole('button', { name: /הרשימה/ }).click();
 assert.match(await a.locator('li', { hasText: 'ביצים' }).textContent(), /לא הגיע במשלוח/);
 await a.getByRole('button', { name: /הגדרות/ }).click();
 assert.match(await a.locator('.card', { hasText: 'משלוחים אחרונים' }).textContent(), /לא הגיעו: ביצים[\s\S]*הביאו שרי/);
+
+// קניתי בלי האפליקציה: מצלמים את הקבלה, Claude מזהה מה נקנה, מאשרים
+const milkHist = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).items.milk.hist.length);
+await a.getByRole('button', { name: /הרשימה/ }).click();
+await a.locator('input[data-scan-free]').setInputFiles({ name: 'kabala.png', mimeType: 'image/png', buffer: PNG });
+await dl.getByRole('heading', { name: /מה נקנה · רמי לוי/ }).waitFor();
+const scanReq = server.scanCalls[0];
+assert.equal(scanReq.model, 'claude-opus-5'); assert.equal(scanReq.output_config.format.type, 'json_schema');
+assert.equal(scanReq.messages[0].content[0].type, 'image');
+assert.match(scanReq.messages[0].content.at(-1).text, /eggs: ביצים/);
+assert.match(await dl.textContent(), /ביצים ×2 · ₪50[\s\S]*חלב · ₪6\.9[\s\S]*שורות שלא התאימו/);
+await dl.getByRole('button', { name: 'אישור' }).click();
+await waitCount(a, '1');
+const st = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).items);
+assert.equal(st.milk.hist.length, milkHist + 1, 'milk recorded as bought even though it was not on the list');
+assert.deepEqual(st.eggs.prices.at(-1).v, 25); assert.equal(st.eggs.prices.at(-1).store, 'רמי לוי');
+// מחיר אחרון מהקבלה מופיע בעריכת המוצר
+await a.getByRole('button', { name: /מה חסר/ }).click();
+await a.click('[data-toggle="eggs"]');
+await waitCount(a, '2');
+await a.getByRole('button', { name: /הרשימה/ }).click();
+await a.locator('li', { hasText: 'ביצים' }).getByRole('button', { name: 'עריכה' }).click();
+assert.match(await a.locator('#editor').textContent(), /🧾 ₪25 ברמי לוי/);
+await a.locator('#editor').getByRole('button', { name: 'ביטול' }).click();
+await a.getByRole('button', { name: /מה חסר/ }).click();
 
 // מוצר לפארם: נרשם תחת "פארם" ולא נכנס להשוואת המחירים ברשתות
 await a.getByRole('button', { name: /מה חסר/ }).click();
