@@ -1,0 +1,16 @@
+// הגדרות הפרסום של השרת ב-Cloudflare (Workers Builds מפרסם אותו בכל push ל-main)
+{
+  "name": "shopping",
+  "main": "worker/worker.js",
+  "compatibility_date": "2025-09-01",
+  "observability": { "enabled": true },
+  "workers_dev": true,
+  // לא למחוק משתנים שהוגדרו בלוח הבקרה של Cloudflare בכל פרסום
+  "keep_vars": true,
+  // בזמן הבנייה: העברת ANTHROPIC_API_KEY מ-Build secrets לסודות של השרת
+  "build": { "command": "sh worker/sync-secrets.sh" },
+  // אותו מאגר KV של "מה שנקרא" (המפתחות כאן מתחילים ב-shop / advice, אין התנגשות)
+  "kv_namespaces": [
+    { "binding": "LIBRARY", "id": "b622c3fe36394ceaa0b02718aaf676b3" }
+  ]
+}

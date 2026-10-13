@@ -1,0 +1,265 @@
+// בדיקות: השרת (מפענחים, גודל אריזה, מיזוג, נקודות קצה, הניתוח של Claude) והאפליקציה בדפדפן עם שרת מדומה
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { chromium } from 'playwright';
+import { parseShufersal, parseRami, parseHtmlProducts, parseSize, unitPrice, promoText, mergeShop, handle, advicePrompt } from '../worker/worker.js';
+import { PRODUCTS } from '../products.js';
+
+// ---------- רשימת הפתיחה ----------
+assert.ok(PRODUCTS.length >= 40, 'products from the chat');
+assert.equal(new Set(PRODUCTS.map(p => p.id)).size, PRODUCTS.length, 'unique ids');
+assert.equal(new Set(PRODUCTS.map(p => p.name)).size, PRODUCTS.length, 'unique names');
+assert.ok(PRODUCTS.every(p => p.count >= 3 && p.emoji && p.q), 'each appeared 3+ times and has an icon and a search term');
+
+// ---------- גודל אריזה, מחיר ליחידה, מבצעים ----------
+assert.deepEqual(parseSize('טופו טבעי 300 גרם'), { amount: 300, unit: 'g' });
+assert.deepEqual(parseSize('בשר טחון 1 ק"ג'), { amount: 1000, unit: 'g' });
+assert.deepEqual(parseSize('חלב 3% 1 ליטר'), { amount: 1000, unit: 'ml' });
+assert.deepEqual(parseSize('רוטב סויה 250 מ"ל'), { amount: 250, unit: 'ml' });
+assert.deepEqual(parseSize('ביצים L 12 יח\''), { amount: 12, unit: 'unit' });
+assert.deepEqual(parseSize('מארז 2*500 גרם'), { amount: 1000, unit: 'g' });
+assert.equal(parseSize('חסה'), null);
+assert.deepEqual(unitPrice(12, { amount: 300, unit: 'g' }), { value: 4, per: 'ל-100 גרם' });
+assert.deepEqual(unitPrice(24, { amount: 12, unit: 'unit' }), { value: 2, per: 'ליחידה' });
+assert.equal(promoText({ name: 'x', promotionMsg: '2 ב-20 ₪' }), '2 ב-20 ₪');
+assert.equal(promoText({ promotions: [{ description: '1+1 על כל המותג' }] }), '1+1 על כל המותג');
+assert.equal(promoText({ sale: null, price: 3 }), '');
+
+// ---------- מפענחים ----------
+const sh = parseShufersal({ results: [
+  { name: 'טופו טבעי', price: { value: 11.9 }, unitDescription: '300 גרם', url: '/online/he/p/P_1', promotionMsg: '2 ב-20 ₪',
+    images: [{ format: 'small', url: 'https://res.cloudinary.com/s.jpg' }, { format: 'medium', url: 'https://res.cloudinary.com/m.jpg' }] },
+  { name: 'בלי מחיר', price: {} }] });
+assert.equal(sh.length, 1);
+assert.deepEqual({ ...sh[0], unitPrice: undefined }, { name: 'טופו טבעי', price: 11.9, unit: '300 גרם', image: 'https://res.cloudinary.com/m.jpg', url: 'https://www.shufersal.co.il/online/he/p/P_1', promo: '2 ב-20 ₪', unitPrice: undefined });
+assert.deepEqual(sh[0].unitPrice, { value: 3.97, per: 'ל-100 גרם' });
+const ra = parseRami({ data: [{ name: 'טופו 250 גרם', price: { price: '9.90' }, images: { small: '/product/1/small.jpg' } }] }, 'טופו');
+assert.equal(ra[0].price, 9.9); assert.equal(ra[0].image, 'https://img.rami-levy.co.il/product/1/small.jpg'); assert.equal(ra[0].unitPrice.value, 3.96);
+const ld = parseHtmlProducts('<script type="application/ld+json">{"@graph":[{"@type":"Product","name":"טופו קרפור","image":["/i.jpg"],"url":"/p/2","offers":{"price":"10.50"}}]}</script>', 'https://www.carrefour.co.il/search?q=x');
+assert.deepEqual(ld.map(x => [x.name, x.price, x.image, x.url]), [['טופו קרפור', 10.5, 'https://www.carrefour.co.il/i.jpg', 'https://www.carrefour.co.il/p/2']]);
+const emb = parseHtmlProducts('<script>window.__D={"items":[{"id":1,"name":"טופו חצי חינם","brand":"x","price":8.9},{"name":"English only","price":3}]}</script>', 'https://shop.hazi-hinam.co.il/search?q=x');
+assert.deepEqual(emb.map(x => [x.name, x.price]), [['טופו חצי חינם', 8.9]]);
+assert.deepEqual(parseShufersal(null), []); assert.deepEqual(parseHtmlProducts('', 'https://x.co.il'), []);
+
+// ---------- מיזוג ----------
+const m = mergeShop({ items: { a: { name: 'א', need: true, at: 5 }, b: { name: 'ב', at: 9 } }, compareAt: 7 },
+  { items: { a: { name: 'א', need: false, at: 7 }, b: { name: 'ב', need: true, at: 3 }, c: { name: 'ג', deleted: true, at: 1 } }, prefs: { 'a|rami': { name: 'x', at: 1 } }, fees: { rami: { value: 0, at: 2 } } });
+assert.equal(m.items.a.need, false); assert.equal(m.items.b.need, undefined); assert.ok(m.items.c.deleted);
+assert.equal(m.prefs['a|rami'].name, 'x'); assert.equal(m.fees.rami.value, 0); assert.equal(m.compareAt, 7);
+
+// ---------- נקודות קצה ----------
+const kv = new Map();
+const env = { LIBRARY: { get: async (k, t) => kv.has(k) ? (t === 'json' ? JSON.parse(kv.get(k)) : kv.get(k)) : null, put: async (k, v) => { kv.set(k, v); } } };
+const call = (path, init) => handle(new Request('https://w.dev' + path, init), env);
+assert.equal((await call('/list', { method: 'OPTIONS' })).status, 204);
+assert.equal((await call('/list', { method: 'PUT', body: JSON.stringify({ items: { tofu: { name: 'טופו', need: true, at: 10 } } }) })).status, 200);
+let merged = await (await call('/list', { method: 'PUT', body: JSON.stringify({ items: { tofu: { name: 'טופו', need: false, at: 4 }, eggs: { name: 'ביצים', need: true, at: 11 } }, compareAt: 999 }) })).json();
+assert.equal(merged.items.tofu.need, true, 'older change does not win'); assert.equal(merged.items.eggs.need, true);
+assert.equal(merged.compareAt, 0, 'compareAt only changes through /compare');
+assert.equal((await call('/compare', { method: 'PUT', body: JSON.stringify({ at: 50, prices: {} }) })).status, 200);
+assert.equal((await (await call('/compare', { method: 'PUT', body: JSON.stringify({ at: 40, prices: { old: 1 } }) })).json()).ok, false, 'older comparison is ignored');
+assert.equal((await (await call('/list')).json()).compareAt, 50);
+assert.equal((await (await call('/compare')).json()).at, 50);
+assert.equal((await call('/list', { method: 'PUT', body: 'x'.repeat(1100 * 1024) })).status, 413);
+
+const orig = globalThis.fetch; const hosts = []; let aiBody = null;
+globalThis.fetch = async (u, o = {}) => {
+  const url = new URL(u); hosts.push(url.hostname);
+  if (url.hostname === 'www.shufersal.co.il') return Response.json({ results: [{ name: 'טופו', price: { value: 12 }, images: [] }] });
+  if (url.hostname === 'www.rami-levy.co.il') { assert.equal(JSON.parse(o.body).q, 'טופו'); return Response.json({ data: [{ name: 'טופו', price: { price: 10 } }] }); }
+  if (url.hostname === 'www.carrefour.co.il') return new Response('blocked', { status: 403 });
+  if (url.hostname === 'api.anthropic.com') {
+    aiBody = JSON.parse(o.body);
+    assert.equal(o.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
+    return Response.json({ model: aiBody.model, stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({
+      best_chain: 'rami', summary: 'ברמי לוי הסל הכי זול.', split: '', tips: ['טופו במבצע'],
+      picks: [{ item: 'tofu', chain: 'rami', index: 0, note: '' }, { item: 'tofu', chain: 'shufersal', index: 7, note: 'מומצא' }, { item: 'ghost', chain: 'rami', index: 0, note: '' }] }) }] });
+  }
+  return new Response('<html></html>');
+};
+let r = await (await call('/prices?q=' + encodeURIComponent('טופו'))).json();
+assert.equal(r.chains.shufersal[0].price, 12); assert.equal(r.chains.rami[0].price, 10);
+assert.deepEqual(r.chains.carrefour, []); assert.ok(r.errors.carrefour);
+assert.equal(hosts.length, 4);
+r = await (await call('/prices?q=' + encodeURIComponent('טופו'))).json();
+assert.ok(r.cached, 'a second press within minutes comes from KV'); assert.equal(hosts.length, 4);
+await call('/prices?fresh=1&q=' + encodeURIComponent('טופו'));
+assert.equal(hosts.length, 8, 'fresh=1 searches again');
+// הניתוח: בלי מפתח → 503; עם מפתח → רק בחירות שמצביעות על מוצר אמיתי
+assert.equal((await call('/advice', { method: 'POST', body: JSON.stringify({ items: [{ id: 'tofu', name: 'טופו' }] }) })).status, 503);
+env.ANTHROPIC_API_KEY = 'k';
+const prices = { tofu: { rami: [{ name: 'טופו', price: 10, promo: '2 ב-18' }], shufersal: [{ name: 'טופו', price: 12 }] } };
+const adv = await (await call('/advice', { method: 'POST', body: JSON.stringify({ items: [{ id: 'tofu', name: 'טופו', qty: 2 }], prices, fees: { rami: 25 } }) })).json();
+assert.equal(adv.best_chain, 'rami'); assert.deepEqual(adv.picks.map(p => p.chain), ['rami'], 'invented index and unknown item dropped');
+assert.equal(aiBody.model, 'claude-opus-5-5'); assert.equal(aiBody.fallbacks, 'default'); assert.equal(aiBody.output_config.format.type, 'json_schema');
+assert.ok(aiBody.messages[0].content.includes('מבצע: 2 ב-18') && aiBody.messages[0].content.includes('rami (רמי לוי): ₪25') && aiBody.messages[0].content.includes('qty=2'));
+assert.ok(advicePrompt([{ id: 'x', name: 'x', qty: 1 }], {}, {}).includes('(no results)'));
+globalThis.fetch = orig;
+delete env.ANTHROPIC_API_KEY;
+console.log('worker: ok');
+
+// ---------- בדפדפן ----------
+const root = new URL('..', import.meta.url).pathname;
+const TYPES = { html: 'text/html', js: 'text/javascript', svg: 'image/svg+xml', png: 'image/png', webmanifest: 'application/manifest+json', woff2: 'font/woff2' };
+const http = createServer(async (req, res) => {
+  const path = decodeURIComponent(new URL(req.url, 'http://x').pathname).replace(/^\/shopping\//, '/').replace(/\/$/, '/index.html');
+  try { const body = await readFile(root + path.slice(1)); res.writeHead(200, { 'content-type': TYPES[path.split('.').pop()] || 'application/octet-stream' }); res.end(body); }
+  catch (e) { res.writeHead(404); res.end(); }
+});
+await new Promise(ok => http.listen(0, ok));
+const BASE = `http://localhost:${http.address().port}/shopping/`;
+
+const server = { list: null, compare: null, priceCalls: [], adviceCalls: [], adviceOff: false };
+const PRICES = {   // קרפור לא מוצאת ביצים
+  'ביצים L': { shufersal: 30, rami: 26, hazi: 25 }, 'טופו': { shufersal: 12, rami: 10, carrefour: 11, hazi: 13 }, 'עגבניות שרי': { shufersal: 9, rami: 8, carrefour: 10, hazi: 9 }
+};
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+async function mock(ctx) {
+  await ctx.route('https://shopping.yuvsaadon.workers.dev/**', async (route) => {
+    const u = new URL(route.request().url()), method = route.request().method();
+    const h = { 'access-control-allow-origin': '*' };
+    if (u.pathname === '/list') {
+      if (method === 'PUT') server.list = mergeShop(server.list, { ...JSON.parse(route.request().postData()), compareAt: 0 });
+      return route.fulfill({ json: { ...(server.list || { items: {} }), compareAt: server.compare ? server.compare.at : 0 }, headers: h });
+    }
+    if (u.pathname === '/compare') {
+      if (method === 'PUT') server.compare = JSON.parse(route.request().postData());
+      return route.fulfill({ json: method === 'PUT' ? { ok: true } : server.compare, headers: h });
+    }
+    if (u.pathname === '/prices') {
+      const q = u.searchParams.get('q'); server.priceCalls.push(q + (u.searchParams.get('fresh') ? '!' : ''));
+      const p = PRICES[q] || {};
+      const chains = Object.fromEntries(['shufersal', 'rami', 'carrefour', 'hazi'].map(c => [c, p[c] ? [
+        { name: q + ' ' + c, price: p[c], image: c === 'rami' ? 'https://img.example/' + encodeURIComponent(q) + '.png' : '', url: '', promo: c === 'hazi' && q === 'טופו' ? '2 ב-22' : '', unitPrice: { value: p[c] / 3, per: 'ל-100 גרם' } },
+        { name: 'משהו אחר', price: 1 }] : []]));
+      return route.fulfill({ json: { q, chains }, headers: h });
+    }
+    if (u.pathname === '/advice') {
+      const b = JSON.parse(route.request().postData()); server.adviceCalls.push(b);
+      if (server.adviceOff) return route.fulfill({ status: 503, json: { error: 'no_key' }, headers: h });
+      // Claude בוחר את התוצאה הראשונה בכל מקום, ובחצי חינם מוצא שהביצים לא מתאימות
+      const picks = [];
+      for (const [id, chains] of Object.entries(b.prices)) for (const [c, list] of Object.entries(chains)) if (list.length) picks.push({ item: id, chain: c, index: id === 'eggs' && c === 'hazi' ? -1 : 0, note: id === 'tofu' && c === 'hazi' ? 'במבצע 2 ב-22' : '' });
+      return route.fulfill({ json: { best_chain: 'rami', summary: 'ברמי לוי הסל הכי זול, גם עם המשלוח.', split: '', tips: ['כדאי לבדוק את מבצע הטופו בחצי חינם'], picks, at: Date.now() }, headers: h });
+    }
+    return route.fulfill({ status: 404, json: {}, headers: h });
+  });
+  await ctx.route('https://img.example/**', r => r.fulfill({ body: PNG, contentType: 'image/png' }));
+}
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const errors = [];
+const phone = async () => {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'he-IL' });
+  await mock(ctx);
+  const p = await ctx.newPage();
+  p.on('pageerror', e => errors.push(e.message));
+  return p;
+};
+const count = (p) => p.locator('#count').textContent();
+const waitCount = (p, n) => p.waitForFunction((n) => document.querySelector('#count').textContent === n, n);
+const a = await phone();
+await a.goto(BASE);
+await a.getByRole('heading', { name: 'מה חסר בבית?' }).waitFor();
+assert.equal(await a.locator('[data-toggle]').count(), PRODUCTS.length, 'all products as tiles');
+for (const id of ['eggs', 'tofu', 'cherry']) await a.click(`[data-toggle="${id}"]`);
+assert.equal(await count(a), '3');
+// מוצר חדש מהחיפוש
+await a.fill('#q', 'במבה');
+await a.getByRole('button', { name: 'הוספת "במבה"' }).click();
+assert.equal(await a.locator('#editor input[name=emoji]').inputValue(), '🍿', 'emoji guessed from the name');
+await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
+await waitCount(a, '4');
+
+// הרשימה
+await a.getByRole('button', { name: /הרשימה/ }).click();
+await a.getByRole('heading', { name: 'רשימת קניות' }).waitFor();
+assert.equal(await a.locator('.list li').count(), 4);
+await a.locator('li', { hasText: 'ביצים' }).getByRole('button', { name: 'יותר' }).click();
+assert.equal(await a.locator('li', { hasText: 'ביצים' }).locator('.qty b').textContent(), '2');
+
+// מכשיר שני פותח את אותה כתובת ורואה את אותה רשימה; שינוי שלו מגיע לראשון בלי לרענן
+await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'ok');
+await a.waitForTimeout(1200);
+assert.ok(server.list && server.list.items.tofu.need, 'list reached the server');
+const b = await phone();
+await b.goto(BASE);
+await waitCount(b, '4');
+await b.locator('.tile', { hasText: 'במבה' }).waitFor();
+await b.click('[data-toggle="lemon"]');
+await waitCount(b, '5');
+await a.waitForFunction(() => document.querySelector('#count').textContent === '5', null, { timeout: 15000 });
+await b.click('[data-toggle="lemon"]');
+await waitCount(b, '4');
+await a.waitForFunction(() => document.querySelector('#count').textContent === '4', null, { timeout: 15000 });
+
+// אין חיפוש מחירים עד שלוחצים
+await a.getByRole('button', { name: /איפה זול/ }).click();
+assert.deepEqual(server.priceCalls, [], 'no automatic price search');
+await a.getByRole('button', { name: /חיפוש מחירים ל-4 מוצרים/ }).click();
+await a.locator('.rec').waitFor();
+assert.equal(server.priceCalls.length, 4); assert.ok(server.priceCalls.every(q => q.endsWith('!')), 'always fresh prices');
+assert.equal(server.adviceCalls.length, 1);
+assert.equal(server.adviceCalls[0].items.find(i => i.id === 'eggs').qty, 2); assert.equal(server.adviceCalls[0].fees.rami, 30);
+assert.match(await a.locator('.rec').textContent(), /רמי לוי[\s\S]*ברמי לוי הסל הכי זול[\s\S]*מבצע הטופו/);
+assert.match(await a.locator('.checked').textContent(), /נבדק עכשיו/);
+// ביצים ×2: Claude פסל את הביצים של חצי חינם, אז הזול בשורה הוא רמי לוי 52
+const eggs = a.locator('tr', { hasText: 'ביצים' });
+assert.match(await eggs.locator('td.min').textContent(), /₪52/);
+assert.match(await eggs.locator('td').nth(3).textContent(), /לא נמצא/);
+// מבצע והערה של Claude בתא
+const tofuHazi = a.locator('tr', { hasText: 'טופו' }).locator('td').nth(3);
+assert.match(await tofuHazi.textContent(), /2 ב-22[\s\S]*במבצע 2 ב-22/);
+assert.match(await a.locator('tr', { hasText: 'במבה' }).textContent(), /לא נמצא/);
+assert.ok(await a.locator('tr', { hasText: 'טופו' }).locator('.art.img img').count(), 'store image used');
+if (process.env.SHOTS) await a.screenshot({ path: `${process.env.SHOTS}/prices.png`, fullPage: true });
+// בחירה ידנית של מוצר אחר גוברת על Claude
+await a.locator('select[data-pref="tofu|shufersal"]').selectOption('משהו אחר');
+assert.match(await a.locator('tr', { hasText: 'טופו' }).locator('td').first().textContent(), /₪1/);
+// המכשיר השני מקבל את ההשוואה בלי לחפש שוב
+await b.getByRole('button', { name: /איפה זול/ }).click();
+await b.locator('.rec').waitFor({ timeout: 15000 });
+assert.equal(server.priceCalls.length, 4, 'second phone did not search again');
+// שינוי ברשימה אחרי החיפוש מסומן
+await a.getByRole('button', { name: /מה חסר/ }).click();
+await a.click('[data-toggle="garlic"]');
+await a.getByRole('button', { name: /איפה זול/ }).click();
+assert.match(await a.locator('.checked').textContent(), /הרשימה השתנתה מאז/);
+assert.match(await a.locator('main').textContent(), /מוצר אחד נוסף אחרי החיפוש: שום/);
+// בלי Claude: עדיין יש המלצה לפי מחיר
+server.adviceOff = true;
+await a.getByRole('button', { name: /חיפוש מחדש/ }).click();
+await a.locator('.rec').waitFor();
+assert.match(await a.locator('.rec').textContent(), /הכי משתלם: שופרסל[\s\S]*לא מוגדר/, 'manual ₪1 tofu makes Shufersal cheapest');
+// דמי משלוח מההגדרות
+await a.getByRole('button', { name: /הגדרות/ }).click();
+await a.locator('input[data-fee="rami"]').fill('0');
+await a.locator('input[data-fee="rami"]').dispatchEvent('change');
+await a.getByRole('button', { name: /איפה זול/ }).click();
+assert.match(await a.locator('.chain.best').textContent(), /רמי לוי[\s\S]*₪18[\s\S]*\+ משלוח ₪0/);
+
+// סיום קניות: מסמנים מה נקנה ומורידים
+await a.getByRole('button', { name: /הרשימה/ }).click();
+await a.locator('li', { hasText: 'טופו' }).locator('input[type=checkbox]').check();
+await a.getByRole('button', { name: /סיימתי/ }).click();
+await waitCount(a, '4');
+// עריכה ומחיקה, והחזרה מההגדרות
+await a.locator('li', { hasText: 'במבה' }).getByRole('button', { name: 'עריכה' }).click();
+await a.locator('#editor').getByRole('button', { name: 'מחיקה' }).click();
+await waitCount(a, '3');
+await a.getByRole('button', { name: /הגדרות/ }).click();
+await a.locator('details summary').click();
+await a.getByRole('button', { name: 'החזרה' }).click();
+assert.ok(await a.locator('.compact li', { hasText: 'במבה' }).count());
+// שרת לא זמין: האפליקציה ממשיכה לעבוד מהטלפון
+await a.context().unroute('https://shopping.yuvsaadon.workers.dev/**');
+await a.context().route('https://shopping.yuvsaadon.workers.dev/**', r => r.abort());
+await a.getByRole('button', { name: /מה חסר/ }).click();
+await a.click('[data-toggle="mushrooms"]');
+await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'off');
+assert.equal(await count(a), '4');
+if (process.env.SHOTS) for (const v of ['home', 'list', 'settings']) { await b.evaluate((v) => document.querySelector(`nav [data-v="${v}"]`).click(), v); await b.waitForTimeout(300); await b.screenshot({ path: `${process.env.SHOTS}/${v}.png`, fullPage: true }); }
+assert.deepEqual(errors, []);
+await browser.close();
+http.close();
+console.log('app: ok');

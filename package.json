@@ -1,0 +1,12 @@
+{
+  "name": "shopping",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node tests/test.mjs",
+    "icons": "node tools/icons.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.55.0"
+  }
+}
