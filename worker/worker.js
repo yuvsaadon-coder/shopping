@@ -216,8 +216,10 @@ export async function shopAdvice(env, body) {
 }
 
 // ---------- הרשימה המשותפת ----------
-// מיזוג לפי מוצר: הגרסה עם at המאוחר יותר מנצחת (גם מחיקה, deleted: true). כך גם בחירות מוצר ודמי משלוח.
+// מיזוג לפי רשומה: הגרסה עם at המאוחר יותר מנצחת (גם מחיקה, deleted: true).
 // ההשוואה האחרונה (גדולה) נשמרת בנפרד ב-/compare; ברשימה רק compareAt, כדי שהבדיקה כל כמה שניות תהיה קלה.
+// items: מוצרים · prefs: בחירת מוצר בכל רשת · fees: דמי משלוח · orders: משלוחים · meta: מי בקניות עכשיו
+const SYNC_KEYS = ['items', 'prefs', 'fees', 'orders', 'meta'];
 export function mergeShop(a, b) {
   const pick = (x, y) => {
     const out = { ...(x || {}) };
@@ -227,8 +229,9 @@ export function mergeShop(a, b) {
     }
     return out;
   };
-  return { items: pick(a && a.items, b && b.items), prefs: pick(a && a.prefs, b && b.prefs), fees: pick(a && a.fees, b && b.fees),
-    compareAt: Math.max(Number(a && a.compareAt) || 0, Number(b && b.compareAt) || 0) };
+  const out = { compareAt: Math.max(Number(a && a.compareAt) || 0, Number(b && b.compareAt) || 0) };
+  for (const k of SYNC_KEYS) out[k] = pick(a && a[k], b && b[k]);
+  return out;
 }
 
 const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS', 'Access-Control-Allow-Headers': '*', 'Access-Control-Max-Age': '86400' };
@@ -252,7 +255,7 @@ export async function handle(req, env) {
   }
   if (path === '/list' || path === '/compare') {
     if (!env.LIBRARY) return json({ error: 'no_kv' }, 503);
-    const cur = (await env.LIBRARY.get('shoplist:main', 'json')) || { items: {}, prefs: {}, fees: {}, compareAt: 0 };
+    const cur = (await env.LIBRARY.get('shoplist:main', 'json')) || { compareAt: 0 };
     if (req.method === 'GET') return path === '/list' ? json(cur) : json((await env.LIBRARY.get('shoplist:compare', 'json')) || null);
     if (req.method !== 'PUT') return json({ error: 'method' }, 405);
     const text = await req.text();

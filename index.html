@@ -118,6 +118,39 @@ dialog { border: 0; padding: 0; border-radius: 20px; width: min(440px, calc(100v
 dialog::backdrop { background: rgba(0,0,0,.4); }
 .sheet { padding: 16px; } .sheet h3 { margin: 0 0 4px; }
 #toast { position: fixed; bottom: calc(84px + env(safe-area-inset-bottom)); left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 10px 16px; border-radius: 12px; z-index: 9; max-width: calc(100vw - 32px); text-align: center; }
+.banner { display: flex; align-items: center; gap: 8px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 10px 12px; margin-top: 10px; font-weight: 600; }
+.banner span { flex: 1; } .banner.warn { background: #fff4df; border-color: #e0a400; }
+@media (prefers-color-scheme: dark) { .banner.warn { background: #3a2f12; } }
+.soon { background: var(--card); border-radius: 16px; padding: 10px 12px; margin: 12px 0 4px; box-shadow: var(--shadow); border-inline-start: 4px solid #e0a400; }
+.soon-h { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.soon-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 6px; }
+.soon-list li { display: flex; align-items: center; gap: 8px; } .soon-list .nm { flex: 1; font-weight: 600; display: flex; flex-direction: column; } .soon-list small { color: var(--muted); font-weight: 400; font-size: 12px; }
+.tile .once { font-size: 11px; color: var(--muted); margin-top: -4px; }
+.tile.ordered { border-style: dashed; border-color: var(--muted); background: var(--card); }
+.badge.truck { background: transparent; color: inherit; font-size: 18px; }
+.modes { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 6px 0 4px; }
+.mode { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 8px; border-radius: 16px; border: 2px solid var(--accent); background: var(--card); color: var(--accent); font-weight: 800; font-size: 16px; cursor: pointer; }
+.mode span { font-size: 30px; line-height: 1; }
+h2.store { font-size: 18px; margin: 22px 0 0; padding-bottom: 4px; border-bottom: 2px solid var(--line); }
+.shop-hero h1 { color: var(--accent); }
+.shop-row { display: flex; align-items: center; gap: 10px; width: 100%; background: none; border: 0; padding: 4px 0; cursor: pointer; text-align: start; font-size: 17px; }
+.shop-row .nm { flex: 1; font-weight: 600; display: flex; flex-direction: column; } .shop-row small { color: var(--muted); font-weight: 400; font-size: 13px; }
+.tick { width: 28px; height: 28px; border-radius: 50%; border: 2px solid var(--accent); display: grid; place-items: center; color: var(--accent-ink); font-weight: 800; flex: none; }
+.list li.got .tick { background: var(--accent); }
+.checkout { position: sticky; bottom: calc(70px + env(safe-area-inset-bottom)); background: linear-gradient(transparent, var(--bg) 30%); padding-top: 16px; display: grid; gap: 4px; }
+.done-note { font-size: 18px; text-align: center; margin: 20px 0; }
+.card.order { border-inline-start: 4px solid var(--accent); } .order-h { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; } .row2 .field { margin: 6px 0; }
+.seg { border: 0; padding: 0; margin: 10px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.seg legend { font-size: 14px; color: var(--muted); margin-bottom: 4px; }
+.seg label { cursor: pointer; } .seg input { position: absolute; opacity: 0; }
+.seg span { display: flex; flex-direction: column; align-items: center; padding: 10px 6px; border: 2px solid var(--line); border-radius: 12px; font-weight: 700; }
+.seg small { font-weight: 400; font-size: 12px; color: var(--muted); }
+.seg input:checked + span { border-color: var(--accent); background: var(--on); }
+.seg input:focus-visible + span { outline: 3px solid var(--accent); }
+.plain { margin: 0; padding-inline-start: 18px; font-size: 14px; } .plain li { margin: 4px 0; } .warn-t { color: var(--danger); }
+.sheet a.btn { text-decoration: none; display: inline-block; }
+.sheet .list { max-height: 45vh; overflow: auto; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 </style>
 </head>
@@ -131,6 +164,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   <button data-v="settings"><span>⚙️</span>הגדרות</button>
 </nav>
 <dialog id="editor"></dialog>
+<dialog id="sheet"></dialog>
 <div id="toast" role="status" hidden></div>
 <script type="module" src="app.js"></script>
 </body>

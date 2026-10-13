@@ -46,7 +46,8 @@ assert.deepEqual(parseShufersal(null), []); assert.deepEqual(parseHtmlProducts('
 const m = mergeShop({ items: { a: { name: 'א', need: true, at: 5 }, b: { name: 'ב', at: 9 } }, compareAt: 7 },
   { items: { a: { name: 'א', need: false, at: 7 }, b: { name: 'ב', need: true, at: 3 }, c: { name: 'ג', deleted: true, at: 1 } }, prefs: { 'a|rami': { name: 'x', at: 1 } }, fees: { rami: { value: 0, at: 2 } } });
 assert.equal(m.items.a.need, false); assert.equal(m.items.b.need, undefined); assert.ok(m.items.c.deleted);
-assert.equal(m.prefs['a|rami'].name, 'x'); assert.equal(m.fees.rami.value, 0); assert.equal(m.compareAt, 7);
+assert.equal(m.prefs['a|rami'].name, 'x');
+assert.equal(mergeShop({ orders: { o1: { status: 'pending', at: 1 } } }, { orders: { o1: { status: 'done', at: 2 } }, meta: { shopping: { active: true, at: 3 } } }).orders.o1.status, 'done'); assert.equal(m.fees.rami.value, 0); assert.equal(m.compareAt, 7);
 
 // ---------- נקודות קצה ----------
 const kv = new Map();
@@ -149,8 +150,11 @@ async function mock(ctx) {
 }
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const errors = [];
-const phone = async () => {
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'he-IL' });
+const T0 = new Date('2026-10-13T09:00:00+03:00');
+const phone = async (name) => {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, locale: 'he-IL', timezoneId: 'Asia/Jerusalem' });
+  await ctx.clock.setFixedTime(T0);
+  await ctx.addInitScript((n) => { if (!localStorage.getItem('shop-me')) localStorage.setItem('shop-me', JSON.stringify(n)); }, name);
   await mock(ctx);
   const p = await ctx.newPage();
   p.on('pageerror', e => errors.push(e.message));
@@ -158,16 +162,26 @@ const phone = async () => {
 };
 const count = (p) => p.locator('#count').textContent();
 const waitCount = (p, n) => p.waitForFunction((n) => document.querySelector('#count').textContent === n, n);
-const a = await phone();
+const a = await phone('יובל');
 await a.goto(BASE);
 await a.getByRole('heading', { name: 'מה חסר בבית?' }).waitFor();
 assert.equal(await a.locator('[data-toggle]').count(), PRODUCTS.length, 'all products as tiles');
 for (const id of ['eggs', 'tofu', 'cherry']) await a.click(`[data-toggle="${id}"]`);
 assert.equal(await count(a), '3');
-// מוצר חדש מהחיפוש
+// "כנראה נגמר": לפי הימים שבהם כל מוצר הופיע בקבוצה; "עוד יש" דוחה לסבב הבא
+const soonFirst = a.locator('.soon-list li').first();
+assert.match(await soonFirst.textContent(), /בדרך כלל כל \d+ ימים · לפני \d+ ימים/);
+const soonId = await soonFirst.locator('[data-snooze]').getAttribute('data-snooze');
+await soonFirst.locator('[data-snooze]').click();
+assert.equal(await a.locator(`.soon [data-snooze="${soonId}"]`).count(), 0, 'snoozed item leaves the list');
+assert.equal(await count(a), '3');
+// מוצר חדש מהחיפוש: חובה לבחור חד פעמי או קבוע
 await a.fill('#q', 'במבה');
 await a.getByRole('button', { name: 'הוספת "במבה"' }).click();
 assert.equal(await a.locator('#editor input[name=emoji]').inputValue(), '🍿', 'emoji guessed from the name');
+await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
+assert.ok(await a.locator('#editor[open]').count(), 'cannot save before choosing one-time or fixed');
+await a.locator('#editor .seg label', { hasText: 'חד פעמי' }).click();
 await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
 await waitCount(a, '4');
 
@@ -182,7 +196,7 @@ assert.equal(await a.locator('li', { hasText: 'ביצים' }).locator('.qty b').
 await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'ok');
 await a.waitForTimeout(1200);
 assert.ok(server.list && server.list.items.tofu.need, 'list reached the server');
-const b = await phone();
+const b = await phone('יעל');
 await b.goto(BASE);
 await waitCount(b, '4');
 await b.locator('.tile', { hasText: 'במבה' }).waitFor();
@@ -237,26 +251,85 @@ await a.locator('input[data-fee="rami"]').dispatchEvent('change');
 await a.getByRole('button', { name: /איפה זול/ }).click();
 assert.match(await a.locator('.chain.best').textContent(), /רמי לוי[\s\S]*₪18[\s\S]*\+ משלוח ₪0/);
 
-// סיום קניות: מסמנים מה נקנה ומורידים
+// מצב קניות: מה שנכנס לסל מסומן, ובסוף מאשרים. המכשיר השני רואה שמישהו בקניות.
 await a.getByRole('button', { name: /הרשימה/ }).click();
-await a.locator('li', { hasText: 'טופו' }).locator('input[type=checkbox]').check();
-await a.getByRole('button', { name: /סיימתי/ }).click();
-await waitCount(a, '4');
-// עריכה ומחיקה, והחזרה מההגדרות
-await a.locator('li', { hasText: 'במבה' }).getByRole('button', { name: 'עריכה' }).click();
-await a.locator('#editor').getByRole('button', { name: 'מחיקה' }).click();
+assert.equal(await count(a), '5');
+await a.getByRole('button', { name: /אני בקניות/ }).click();
+await a.locator('[data-cart="tofu"]').click();
+await a.locator('li', { hasText: 'במבה' }).locator('[data-cart]').click();
+assert.match(await a.locator('.shop-hero').textContent(), /2 בסל · 3 נשארו/);
+if (process.env.SHOTS) await a.screenshot({ path: `${process.env.SHOTS}/shopping.png`, fullPage: true });
+await b.getByRole('button', { name: /מה חסר/ }).click();
+await b.locator('.banner', { hasText: 'יובל בקניות עכשיו' }).waitFor({ timeout: 15000 });
+await a.getByRole('button', { name: /סיום קניות \(2\)/ }).click();
+await a.locator('#sheet').getByRole('button', { name: 'אישור – קניתי' }).click();
 await waitCount(a, '3');
+assert.equal(await a.locator('[data-toggle]', { hasText: 'במבה' }).count(), 0, 'one-time product is gone after buying');
+const tofuHist = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).items.tofu.hist.length);
+assert.ok(tofuHist > 5, 'purchase recorded in the history');
+await b.locator('.banner', { hasText: 'בקניות עכשיו' }).waitFor({ state: 'detached', timeout: 15000 });
+
+// משלוח: מתי מגיע, מה בהזמנה; תזכורת ב-20:00 באותו יום לבדוק שהגיע הכול
+await a.getByRole('button', { name: /הזמנתי משלוח/ }).click();
+const dl = a.locator('#sheet');
+await dl.locator('input[name=date]').fill('2026-10-13');
+await dl.locator('input[name=time]').fill('12:00');
+await dl.locator('label', { hasText: 'שום' }).locator('input').uncheck();
+if (process.env.SHOTS) await a.screenshot({ path: `${process.env.SHOTS}/delivery.png` });
+await dl.getByRole('button', { name: 'שמירה' }).click();
+await dl.getByRole('heading', { name: /המשלוח נשמר/ }).waitFor();
+const gcal = await dl.getByRole('link', { name: 'יומן Google' }).getAttribute('href');
+assert.ok(gcal.includes('dates=20261013T170000Z/20261013T171500Z'), 'reminder at 20:00 Israel time: ' + gcal);
+await dl.getByRole('button', { name: 'סגירה' }).click();
+await waitCount(a, '1');
+assert.match(await a.locator('.order').textContent(), /היום ב-12:00[\s\S]*ביצים/);
+await a.getByRole('button', { name: /מה חסר/ }).click();
+assert.ok(await a.locator('[data-toggle="eggs"] .truck').count(), 'ordered items marked on the tile');
+assert.equal(await a.locator('.banner.warn').count(), 0, 'no check before 20:00');
+await a.context().clock.setFixedTime(new Date('2026-10-13T20:05:00+03:00'));
+await a.locator('.banner.warn', { hasText: 'הגיע כמו שהוזמן' }).waitFor({ timeout: 15000 });
+await a.locator('.banner.warn').getByRole('button', { name: 'בדיקה' }).click();
+await dl.locator('label', { hasText: 'ביצים' }).locator('input').uncheck();
+await dl.locator('input[name=changes]').fill('הביאו שרי בקופסה אחרת');
+await dl.getByRole('button', { name: 'אישור' }).click();
+await waitCount(a, '2');
+assert.equal(await a.locator('.banner.warn').count(), 0);
+await a.getByRole('button', { name: /הרשימה/ }).click();
+assert.match(await a.locator('li', { hasText: 'ביצים' }).textContent(), /לא הגיע במשלוח/);
+await a.getByRole('button', { name: /הגדרות/ }).click();
+assert.match(await a.locator('.card', { hasText: 'משלוחים אחרונים' }).textContent(), /לא הגיעו: ביצים[\s\S]*הביאו שרי/);
+
+// מוצר לפארם: נרשם תחת "פארם" ולא נכנס להשוואת המחירים ברשתות
+await a.getByRole('button', { name: /מה חסר/ }).click();
+await a.fill('#q', 'אקמול');
+await a.keyboard.press('Enter');
+assert.equal(await a.locator('#editor select[name=cat]').inputValue(), 'pantry');
+await a.locator('#editor select[name=cat]').selectOption('pharm');
+await a.locator('#editor .seg label', { hasText: 'קבוע' }).click();
+await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
+await waitCount(a, '3');
+await a.getByRole('button', { name: /הרשימה/ }).click();
+assert.match(await a.locator('main').textContent(), /🛒 סופר[\s\S]*💊 פארם[\s\S]*אקמול/);
+assert.match(await a.locator('li', { hasText: 'אקמול' }).textContent(), /הוסיף\/ה: יובל/);
+await a.getByRole('button', { name: /איפה זול/ }).click();
+assert.match(await a.locator('[data-compare]').textContent(), /ל-2 מוצרים/, 'pharmacy items are not compared');
+
+// עריכה ומחיקה, והחזרה מההגדרות
+await a.getByRole('button', { name: /הרשימה/ }).click();
+await a.locator('li', { hasText: 'שום' }).getByRole('button', { name: 'עריכה' }).click();
+await a.locator('#editor').getByRole('button', { name: 'מחיקה' }).click();
+await waitCount(a, '2');
 await a.getByRole('button', { name: /הגדרות/ }).click();
 await a.locator('details summary').click();
 await a.getByRole('button', { name: 'החזרה' }).click();
-assert.ok(await a.locator('.compact li', { hasText: 'במבה' }).count());
+assert.ok(await a.locator('.compact li', { hasText: 'שום' }).count());
 // שרת לא זמין: האפליקציה ממשיכה לעבוד מהטלפון
 await a.context().unroute('https://shopping.yuvsaadon.workers.dev/**');
 await a.context().route('https://shopping.yuvsaadon.workers.dev/**', r => r.abort());
 await a.getByRole('button', { name: /מה חסר/ }).click();
 await a.click('[data-toggle="mushrooms"]');
 await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'off');
-assert.equal(await count(a), '4');
+assert.equal(await count(a), '3');
 if (process.env.SHOTS) for (const v of ['home', 'list', 'settings']) { await b.evaluate((v) => document.querySelector(`nav [data-v="${v}"]`).click(), v); await b.waitForTimeout(300); await b.screenshot({ path: `${process.env.SHOTS}/${v}.png`, fullPage: true }); }
 assert.deepEqual(errors, []);
 await browser.close();

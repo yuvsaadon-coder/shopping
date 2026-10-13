@@ -1,11 +1,14 @@
-// קניות בבית: מה חסר, רשימה אחת לכל הבית (מסתנכרנת בין המכשירים),
+// קניות בבית: מה חסר, רשימה אחת לכל הבית (מסתנכרנת בין המכשירים), מצב קניות עם אישור בקופה,
+// משלוחים עם תזכורת לבדיקה, "כנראה נגמר" לפי הקצב שבו קונים כל מוצר,
 // ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם, והמלצה איפה כדאי להזמין.
-import { CATS, PRODUCTS, EMOJI_HINTS } from './products.js';
+import { CATS, PRODUCTS, EMOJI_HINTS, STORES, storeOf, SEEN } from './products.js';
 
 const SERVER = (() => { try { return localStorage.getItem('shop-server') || 'https://shopping.yuvsaadon.workers.dev'; } catch (e) { return 'https://shopping.yuvsaadon.workers.dev'; } })();
 const KEY = 'shop-state-v2';
 const POLL_MS = 10000;
 const USE_AI = false;   // הניתוח של Claude (/advice) כבוי בינתיים; ההמלצה לפי מחיר, סל משותף ומשלוח
+const DAY = 86400000;
+const REMIND_HOUR = 20;   // ביום המשלוח, ב-20:00: לבדוק שהגיע כל מה שהוזמן
 export const CHAINS = [
   { id: 'shufersal', name: 'שופרסל', color: '#d8232a', url: 'https://www.shufersal.co.il/online/he/search?text=' },
   { id: 'rami', name: 'רמי לוי', color: '#0a58a8', url: 'https://www.rami-levy.co.il/he/online/search?q=' },
@@ -16,7 +19,9 @@ const DEFAULT_FEE = 30;   // דמי משלוח משוערים; אפשר לשנו
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const now = () => Date.now();
+// עולה תמיד, גם בשתי פעולות באותה אלפית שנייה – כדי שהשינוי האחרון ינצח במיזוג
+let lastNow = 0;
+const now = () => (lastNow = Math.max(Date.now(), lastNow + 1));
 const money = (n) => '₪' + (Math.round(n * 100) / 100).toFixed(2).replace(/\.00$/, '');
 const catOf = (id) => CATS.find(c => c.id === id) || CATS[3];
 const chainOf = (id) => CHAINS.find(c => c.id === id);
@@ -34,27 +39,71 @@ function ago(t) {
   const d = Math.round(h / 24);
   return d === 1 ? 'אתמול' : `לפני ${d} ימים`;
 }
+const pad = (n) => String(n).padStart(2, '0');
+const DAYS_HE = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+function whenText(t) {
+  const d = new Date(t), today = new Date(); today.setHours(0, 0, 0, 0);
+  const diff = Math.round((new Date(d).setHours(0, 0, 0, 0) - today) / DAY);
+  const day = diff === 0 ? 'היום' : diff === 1 ? 'מחר' : diff === -1 ? 'אתמול' : `יום ${DAYS_HE[d.getDay()]} ${d.getDate()}/${d.getMonth() + 1}`;
+  return `${day} ב-${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+const dateOnly = (t) => { const d = new Date(t); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
 
 // ---------- מצב ----------
 const S = store.get(KEY) || {};
-S.items = S.items || {};
-S.prefs = S.prefs || {};
-S.fees = S.fees || {};
+for (const k of ['items', 'prefs', 'fees', 'orders', 'meta']) S[k] = S[k] || {};
 S.compare = S.compare || null;
-for (const p of PRODUCTS) if (!S.items[p.id]) S.items[p.id] = { ...p, need: false, qty: 1, got: false, at: 0 };
+// היסטוריית הקנייה מתחילה מהימים שבהם המוצר הופיע בקבוצה (בצהריים, שעון מקומי)
+const seenHist = (id) => (SEEN[id] || []).map(d => new Date(d + 'T12:00:00').getTime());
+for (const p of PRODUCTS) {
+  if (!S.items[p.id]) S.items[p.id] = { ...p, kind: 'fixed', need: false, qty: 1, got: false, hist: seenHist(p.id), at: 0 };
+  else if (!S.items[p.id].hist) S.items[p.id].hist = seenHist(p.id);
+}
 let view = S.view || 'home', filter = '', catFilter = '', comparing = null, syncState = 'idle', installEvt = null;
 
 const live = () => Object.values(S.items).filter(i => !i.deleted);
-const needed = () => live().filter(i => i.need);
+const isOrdered = (i) => !!(i.ordered && S.orders[i.ordered] && S.orders[i.ordered].status === 'pending');
+// מה צריך לקנות עכשיו (בלי מה שכבר בדרך במשלוח)
+const needed = () => live().filter(i => i.need && !isOrdered(i));
+const superNeeded = () => needed().filter(i => storeOf(i.cat) === 'super');
+const pendingOrders = () => Object.values(S.orders).filter(o => o.status === 'pending').sort((a, b) => a.when - b.when);
 const fee = (c) => (S.fees[c] && Number.isFinite(S.fees[c].value)) ? S.fees[c].value : DEFAULT_FEE;
+const me = () => store.get('shop-me') || '';
 function save(sync = true) { store.set(KEY, S); if (sync) scheduleSync(); }
 function touch(id, patch) { S.items[id] = { ...S.items[id], ...patch, at: now() }; save(); render(); }
+// נקנה: יורד מהרשימה ונרשם בהיסטוריה. מוצר חד-פעמי נמחק אחרי שנקנה.
+function bought(id, when = now()) {
+  const i = S.items[id];
+  const hist = [...(i.hist || []), when].slice(-30);
+  S.items[id] = { ...i, need: false, got: false, qty: 1, ordered: '', hist, snooze: 0, deleted: i.kind === 'once' ? true : i.deleted, at: now() };
+}
 
-// ---------- סנכרון: השרת ממזג לפי at לכל מוצר; ההשוואה האחרונה נשמרת בנפרד ----------
+// ---------- כל כמה זמן קונים (מההיסטוריה) ----------
+// קניות שקרובות זו לזו (עד 3 ימים) נחשבות סבב אחד; הקצב = החציון של הפערים בין הסבבים
+export function cycleOf(hist, snooze = 0, at = now()) {
+  const ev = [];
+  for (const t of [...(hist || [])].sort((a, b) => a - b)) if (!ev.length || t - ev[ev.length - 1] > 3 * DAY) ev.push(t); else ev[ev.length - 1] = t;
+  if (ev.length < 2) return null;
+  const gaps = ev.slice(1).map((t, k) => (t - ev[k]) / DAY).sort((a, b) => a - b);
+  const every = gaps.length % 2 ? gaps[(gaps.length - 1) / 2] : (gaps[gaps.length / 2 - 1] + gaps[gaps.length / 2]) / 2;
+  const last = Math.max(ev[ev.length - 1], snooze || 0);
+  return { every: Math.max(1, Math.round(every)), since: Math.floor((at - last) / DAY) };
+}
+// "כנראה נגמר": מוצר קבוע שעבר כמעט כל הזמן שבדרך כלל עובר בין קנייה לקנייה
+function runningOut() {
+  return live().filter(i => !i.need && i.kind !== 'once')
+    .map(i => ({ i, c: cycleOf(i.hist, i.snooze) }))
+    // מה שעבר הרבה יותר מהרגיל כנראה נקנה בלי שנרשם – לא מציקים עליו
+    .filter(x => x.c && x.c.every >= 3 && x.c.since >= x.c.every * 0.85 && x.c.since <= x.c.every * 2.5 + 7)
+    .sort((a, b) => b.c.since / b.c.every - a.c.since / a.c.every).slice(0, 6);
+}
+
+// ---------- סנכרון: השרת ממזג לפי at לכל רשומה; ההשוואה האחרונה נשמרת בנפרד ----------
 let syncTimer = null, syncing = false, dirty = false, compareDirty = false;
+const SYNC_KEYS = ['items', 'prefs', 'fees', 'orders', 'meta'];
 function merge(remote) {
   let changed = false;
-  for (const key of ['items', 'prefs', 'fees']) {
+  for (const key of SYNC_KEYS) {
     for (const [id, it] of Object.entries((remote && remote[key]) || {})) {
       if (it && (!S[key][id] || (it.at || 0) > (S[key][id].at || 0))) { S[key][id] = it; changed = true; }
     }
@@ -70,7 +119,7 @@ async function sync() {
     send = dirty; dirty = false;
     sendCompare = compareDirty; compareDirty = false;
     if (sendCompare && S.compare) await fetch(SERVER + '/compare', { method: 'PUT', body: JSON.stringify(S.compare) }).then(r => { if (!r.ok) throw new Error(r.status); });
-    const body = { items: Object.fromEntries(Object.entries(S.items).filter(([, i]) => i.at)), prefs: S.prefs, fees: S.fees };
+    const body = { items: Object.fromEntries(Object.entries(S.items).filter(([, i]) => i.at)), prefs: S.prefs, fees: S.fees, orders: S.orders, meta: S.meta };
     const r = send ? await fetch(SERVER + '/list', { method: 'PUT', body: JSON.stringify(body) }) : await fetch(SERVER + '/list');
     if (!r.ok) throw new Error(r.status);
     const remote = await r.json();
@@ -101,10 +150,11 @@ function tileArt(i, small = false) {
 }
 function render() {
   document.body.dataset.view = view;
+  document.body.dataset.shopping = S.mode === 'shop' ? '1' : '';
   const n = needed().length;
   $('#count').textContent = n ? String(n) : '';
   for (const b of document.querySelectorAll('nav button')) b.setAttribute('aria-current', b.dataset.v === view ? 'page' : 'false');
-  $('main').innerHTML = view === 'home' ? homeView() : view === 'list' ? listView() : view === 'compare' ? compareView() : settingsView();
+  $('main').innerHTML = banners() + (view === 'home' ? homeView() : view === 'list' ? listView() : view === 'compare' ? compareView() : settingsView());
   paintSync();
 }
 
@@ -115,6 +165,20 @@ function installBanner() {
   if (!installEvt && !isIOS()) return '';
   return `<div class="install"><span>📲 להתקין את האפליקציה בטלפון?</span><button class="btn primary sm" data-install>התקנה</button><button class="icon" data-install-x aria-label="לא עכשיו">✕</button></div>`;
 }
+const remindAt = (o) => { const d = new Date(o.when); d.setHours(REMIND_HOUR, 0, 0, 0); return Math.max(d.getTime(), o.when + 3600000); };
+function banners() {
+  let out = '';
+  // משלוח שהגיע זמן לבדוק אותו
+  for (const o of pendingOrders().filter(o => now() >= remindAt(o))) {
+    out += `<div class="banner warn"><span>📦 המשלוח מ${esc(o.chainName)} (${whenText(o.when)}) הגיע כמו שהוזמן?</span><button class="btn primary sm" data-verify="${o.id}">בדיקה</button></div>`;
+  }
+  // מישהו אחר בקניות עכשיו
+  const sh = S.meta.shopping;
+  if (sh && sh.active && sh.by !== me() && now() - sh.at < 3 * 3600000) {
+    out += `<div class="banner"><span>🛒 ${esc(sh.by || 'מישהו')} ${sh.kind === 'delivery' ? 'מזמין/ה משלוח' : 'בקניות'} עכשיו – מה שתוסיפו יופיע אצלו/ה ברשימה</span></div>`;
+  }
+  return out;
+}
 
 function homeView() {
   const f = filter.trim();
@@ -122,31 +186,197 @@ function homeView() {
   const groups = CATS.map(c => ({ c, list: items.filter(i => i.cat === c.id).sort((a, b) => (b.count || 0) - (a.count || 0) || a.name.localeCompare(b.name, 'he')) })).filter(g => g.list.length);
   const chips = `<div class="chips">${[{ id: '', name: 'הכול', icon: '🛒' }, ...CATS].map(c => `<button class="chip" data-cat="${c.id}" aria-pressed="${catFilter === c.id}">${c.icon} ${esc(c.name)}</button>`).join('')}</div>`;
   const add = f && !live().some(i => i.name === f) ? `<button class="tile add" data-add="${esc(f)}">${tileArt({ emoji: '➕', cat: 'home' })}<span class="nm">הוספת "${esc(f)}"</span></button>` : '';
+  const out = !f && !catFilter ? runningOut() : [];
+  const soon = out.length ? `<section class="soon"><div class="soon-h"><b>⏳ כנראה נגמר בקרוב</b><button class="btn sm" data-addsoon>הוספת הכול</button></div>
+    <ul class="soon-list">${out.map(({ i, c }) => `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}<small>בדרך כלל כל ${c.every} ימים · לפני ${c.since} ימים</small></span>
+      <button class="btn sm primary" data-soon-add="${i.id}">חסר</button><button class="btn sm ghost" data-snooze="${i.id}">עוד יש</button></li>`).join('')}</ul></section>` : '';
+  const badge = (i) => isOrdered(i) ? '<span class="badge truck" title="בדרך במשלוח">🚚</span>'
+    : i.need ? `<span class="badge">${i.qty > 1 ? '×' + i.qty : '✓'}</span>` : '';
   return installBanner() + `<section class="hero"><h1>מה חסר בבית?</h1><p>${needed().length ? `${needed().length} מוצרים ברשימה` : 'לוחצים על מה שנגמר, וזה עובר לרשימה'}</p></section>
     <div class="search"><input id="q" type="search" placeholder="חיפוש או הוספת מוצר…" value="${esc(filter)}" aria-label="חיפוש מוצר" enterkeyhint="done"></div>
-    ${chips}
+    ${chips}${soon}
     ${groups.map(g => `<h2 class="cat" style="--c:${g.c.color}">${g.c.icon} ${esc(g.c.name)}</h2><div class="grid">${g.list.map(i => `
-      <button class="tile${i.need ? ' on' : ''}" data-toggle="${i.id}" aria-pressed="${!!i.need}">
-        ${tileArt(i)}<span class="nm">${esc(i.name)}</span>${i.need ? `<span class="badge">${i.qty > 1 ? '×' + i.qty : '✓'}</span>` : ''}
+      <button class="tile${i.need ? ' on' : ''}${isOrdered(i) ? ' ordered' : ''}" data-toggle="${i.id}" aria-pressed="${!!i.need}">
+        ${tileArt(i)}<span class="nm">${esc(i.name)}</span>${i.kind === 'once' ? '<span class="once">חד פעמי</span>' : ''}${badge(i)}
       </button>`).join('')}</div>`).join('')}
     <div class="grid">${add || `<button class="tile add" data-add="">${tileArt({ emoji: '➕', cat: 'home' })}<span class="nm">מוצר חדש</span></button>`}</div>`;
 }
 
+// ---------- הרשימה: רגיל / מצב קניות ----------
+function groupByStore(list, row) {
+  const stores = STORES.map(s => ({ s, list: list.filter(i => storeOf(i.cat) === s.id) })).filter(g => g.list.length);
+  return stores.map(({ s, list }) => (stores.length > 1 ? `<h2 class="store">${s.icon} ${s.name}</h2>` : '') +
+    CATS.map(c => ({ c, l: list.filter(i => i.cat === c.id) })).filter(g => g.l.length)
+      .map(g => `<h2 class="cat" style="--c:${g.c.color}">${g.c.icon} ${esc(g.c.name)}</h2><ul class="list">${g.l.map(row).join('')}</ul>`).join('')).join('');
+}
 function listView() {
-  const list = needed();
-  if (!list.length) return `<section class="hero"><h1>הרשימה ריקה</h1><p>בוחרים מוצרים במסך "מה חסר"</p></section><button class="btn primary wide" data-go="home">למסך מה חסר</button>`;
-  const got = list.filter(i => i.got).length;
-  const groups = CATS.map(c => ({ c, list: list.filter(i => i.cat === c.id) })).filter(g => g.list.length);
-  return `<section class="hero"><h1>רשימת קניות</h1><p>${list.length} מוצרים${got ? ` · ${got} כבר בסל` : ''}</p></section>
-    <div class="row-btns"><button class="btn" data-share>שליחה בווטסאפ</button><button class="btn" data-go="compare">איפה כדאי להזמין?</button></div>
-    ${groups.map(g => `<h2 class="cat" style="--c:${g.c.color}">${g.c.icon} ${esc(g.c.name)}</h2><ul class="list">${g.list.map(i => `
-      <li class="${i.got ? 'got' : ''}">
-        <label class="check"><input type="checkbox" data-got="${i.id}" ${i.got ? 'checked' : ''}><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.note ? `<small>${esc(i.note)}</small>` : ''}</span></span></label>
-        <span class="qty"><button data-qty="${i.id}" data-d="-1" aria-label="פחות">−</button><b>${i.qty || 1}</b><button data-qty="${i.id}" data-d="1" aria-label="יותר">+</button></span>
-        <button class="icon" data-edit="${i.id}" aria-label="עריכה">✎</button>
-      </li>`).join('')}</ul>`).join('')}
-    ${got ? `<button class="btn primary wide" data-done>סיימתי – להוריד ${got} מוצרים שנקנו</button>` : ''}
+  const list = needed(), orders = pendingOrders();
+  const ordersHtml = orders.map(o => {
+    const its = Object.keys(o.items).map(id => S.items[id]).filter(Boolean);
+    return `<div class="card order"><div class="order-h"><b>🚚 משלוח מ${esc(o.chainName)}</b><span>${whenText(o.when)}</span></div>
+      <p class="note">${its.map(i => esc(i.name)).join(' · ')}</p>
+      <div class="row-btns"><button class="btn sm primary" data-verify="${o.id}">הגיע – בדיקה</button><button class="btn sm" data-remind="${o.id}">📅 תזכורת ביומן</button><button class="btn sm ghost" data-cancel-order="${o.id}">ביטול המשלוח</button></div></div>`;
+  }).join('');
+  if (S.mode === 'shop') return shopView(list) + ordersHtml;
+  if (!list.length) return `<section class="hero"><h1>הרשימה ריקה</h1><p>בוחרים מוצרים במסך "מה חסר"</p></section>${ordersHtml}<button class="btn primary wide" data-go="home">למסך מה חסר</button>`;
+  const row = (i) => `<li>
+      ${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.note || i.by || i.kind === 'once' ? `<small>${[i.kind === 'once' ? 'חד פעמי' : '', i.note, i.by ? 'הוסיף/ה: ' + i.by : ''].filter(Boolean).map(esc).join(' · ')}</small>` : ''}</span>
+      <span class="qty"><button data-qty="${i.id}" data-d="-1" aria-label="פחות">−</button><b>${i.qty || 1}</b><button data-qty="${i.id}" data-d="1" aria-label="יותר">+</button></span>
+      <button class="icon" data-edit="${i.id}" aria-label="עריכה">✎</button>
+    </li>`;
+  return `<section class="hero"><h1>רשימת קניות</h1><p>${list.length} מוצרים</p></section>
+    <div class="modes"><button class="mode" data-start-shop><span>🛒</span>אני בקניות</button><button class="mode" data-start-delivery><span>🚚</span>הזמנתי משלוח</button></div>
+    <div class="row-btns"><button class="btn sm" data-share>שליחה בווטסאפ</button><button class="btn sm" data-go="compare">איפה כדאי להזמין?</button></div>
+    ${ordersHtml}${groupByStore(list, row)}
     <button class="btn ghost wide" data-clear>ניקוי כל הרשימה</button>`;
+}
+// מצב קניות: נגיעה בשורה = נכנס לסל. בסוף מאשרים מה נקנה.
+function shopView(list) {
+  const todo = list.filter(i => !i.got), cart = list.filter(i => i.got);
+  const row = (i) => `<li class="${i.got ? 'got' : ''}"><button class="shop-row" data-cart="${i.id}" aria-pressed="${!!i.got}">
+      <span class="tick">${i.got ? '✓' : ''}</span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.qty > 1 ? ` ×${i.qty}` : ''}${i.note ? `<small>${esc(i.note)}</small>` : ''}</span></button></li>`;
+  return `<section class="hero shop-hero"><h1>🛒 בקניות</h1><p>${cart.length} בסל · ${todo.length} נשארו</p></section>
+    ${todo.length ? groupByStore(todo, row) : '<p class="note done-note">הכול בסל! 🎉</p>'}
+    ${cart.length ? `<h2 class="cat">בסל (${cart.length})</h2><ul class="list">${cart.map(row).join('')}</ul>` : ''}
+    <div class="checkout"><button class="btn primary wide big" data-checkout>סיום קניות${cart.length ? ` (${cart.length})` : ''}</button><button class="btn ghost" data-stop-shop>יציאה בלי לסיים</button></div>`;
+}
+
+// ---------- חלונות: אישור בקופה, משלוח, בדיקת משלוח ----------
+function sheet(html, onClose) {
+  const dlg = $('#sheet');
+  dlg.innerHTML = `<form method="dialog" class="sheet">${html}</form>`;
+  dlg.returnValue = '';
+  dlg.onclose = () => { const f = $('form', dlg); onClose(dlg.returnValue, f); if ($('form', dlg) === f) dlg.innerHTML = ''; };
+  dlg.showModal();
+  return $('form', dlg);
+}
+function checkout() {
+  const list = needed(), cart = list.filter(i => i.got), rest = list.filter(i => !i.got);
+  if (!cart.length) { if (confirm('הסל ריק. לצאת ממצב קניות?')) stopShop(); return; }
+  sheet(`<h3>לאשר שקנית?</h3>
+    <p class="note">מה שמסומן יורד מהרשימה ונרשם כנקנה. אפשר להוריד סימון ממה שבסוף לא נקנה.</p>
+    <ul class="list compact">${cart.map(i => `<li><label class="check"><input type="checkbox" name="b" value="${i.id}" checked><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.qty > 1 ? ` ×${i.qty}` : ''}</span></span></label></li>`).join('')}</ul>
+    ${rest.length ? `<p class="note">נשארים ברשימה: ${rest.map(i => esc(i.name)).join(', ')}</p>` : ''}
+    <div class="row-btns"><button class="btn primary" value="ok">אישור – קניתי</button><button class="btn" value="back">חזרה לקניות</button></div>`,
+  (v, form) => {
+    if (v !== 'ok') return;
+    const ids = [...form.querySelectorAll('input[name=b]:checked')].map(x => x.value);
+    for (const id of ids) bought(id);
+    for (const i of cart) if (!ids.includes(i.id)) S.items[i.id] = { ...S.items[i.id], got: false, at: now() };
+    stopShop(false);
+    toast(ids.length === 1 ? 'מוצר אחד נרשם כנקנה' : `${ids.length} מוצרים נרשמו כנקנו`);
+  });
+}
+function startShop() {
+  S.mode = 'shop';
+  S.meta.shopping = { by: me(), active: true, kind: 'shop', at: now() };
+  view = 'list'; S.view = view; save(); render(); scrollTo(0, 0);
+}
+function stopShop(keepCart = true) {
+  S.mode = '';
+  if (!keepCart) { /* הסל כבר טופל */ } else for (const i of needed()) if (i.got) S.items[i.id] = { ...i, got: false, at: now() };
+  S.meta.shopping = { by: me(), active: false, at: now() };
+  save(); render();
+}
+function startDelivery() {
+  const list = needed();
+  if (!list.length) { toast('הרשימה ריקה'); return; }
+  const best = S.compare && S.compare.prices ? basket(superNeeded(), S.compare, S.prefs, {}).best : null;
+  const t = new Date(now() + DAY); t.setHours(10, 0, 0, 0);
+  const form = sheet(`<h3>🚚 הזמנתי משלוח</h3>
+    <label class="field">מאיפה<select name="chain">${CHAINS.map(c => `<option value="${c.id}"${best && best.chain.id === c.id ? ' selected' : ''}>${c.name}</option>`).join('')}<option value="other">אחר</option></select></label>
+    <div class="row2"><label class="field">מתי מגיע<input type="date" name="date" required value="${dateOnly(t)}"></label><label class="field">שעה<input type="time" name="time" required value="10:00"></label></div>
+    <p class="note">מה בהזמנה (אפשר להוריד סימון ממה שלא הוזמן):</p>
+    <ul class="list compact">${list.map(i => `<li><label class="check"><input type="checkbox" name="o" value="${i.id}" checked><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.qty > 1 ? ` ×${i.qty}` : ''}</span></span></label></li>`).join('')}</ul>
+    <p class="note">ביום המשלוח ב-20:00 תופיע תזכורת לבדוק שהגיע הכול.</p>
+    <div class="row-btns"><button class="btn primary" value="ok">שמירה</button><button class="btn" value="cancel" formnovalidate>ביטול</button></div>`,
+  (v, f) => {
+    if (v !== 'ok') return;
+    const ids = [...f.querySelectorAll('input[name=o]:checked')].map(x => x.value);
+    const when = new Date(f.date.value + 'T' + (f.time.value || '10:00')).getTime();
+    if (!ids.length || !Number.isFinite(when)) return;
+    const chain = chainOf(f.chain.value);
+    const id = 'o' + now().toString(36);
+    S.orders[id] = { id, chain: f.chain.value, chainName: chain ? chain.name : 'משלוח', when, items: Object.fromEntries(ids.map(x => [x, S.items[x].qty || 1])), status: 'pending', by: me(), at: now() };
+    for (const x of ids) S.items[x] = { ...S.items[x], ordered: id, got: false, at: now() };
+    S.meta.shopping = { by: me(), active: false, at: now() };
+    save(); render();
+    askNotify();
+    reminderSheet(id, true);
+  });
+  form.chain.focus();
+}
+// תזכורת: ביומן (Google או קובץ ics לאייפון), ובנוסף התראה מהאפליקציה כשהיא פתוחה
+function calTimes(o) { const s = remindAt(o), e = s + 15 * 60000; const z = (t) => new Date(t).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); return [z(s), z(e)]; }
+const appUrl = (o) => location.origin + location.pathname + '?verify=' + o.id;
+function googleCalUrl(o) {
+  const [s, e] = calTimes(o);
+  const its = Object.keys(o.items).map(id => S.items[id] && S.items[id].name).filter(Boolean).join(', ');
+  return 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent(`בדיקת המשלוח מ${o.chainName}`) +
+    '&dates=' + s + '/' + e + '&details=' + encodeURIComponent(`לבדוק שהגיע כל מה שהוזמן: ${its}\n${appUrl(o)}`);
+}
+export function icsText(o, names = []) {
+  const [s, e] = calTimes(o);
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const summary = `בדיקת המשלוח מ${o.chainName}`;
+  return ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//kniyot-babayit//he', 'BEGIN:VEVENT', `UID:${o.id}@kniyot-babayit`, `DTSTAMP:${stamp}`,
+    `DTSTART:${s}`, `DTEND:${e}`, `SUMMARY:${summary}`, `DESCRIPTION:${('לבדוק שהגיע: ' + names.join(', ')).replace(/[,;]/g, '\\$&')}`, `URL:${appUrl(o)}`,
+    'BEGIN:VALARM', 'TRIGGER:PT0M', 'ACTION:DISPLAY', `DESCRIPTION:${summary}`, 'END:VALARM', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+}
+function downloadIcs(o) {
+  const names = Object.keys(o.items).map(id => S.items[id] && S.items[id].name).filter(Boolean);
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([icsText(o, names)], { type: 'text/calendar' }));
+  a.download = 'tizkoret-mishloach.ics';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+function reminderSheet(id, fresh = false) {
+  const o = S.orders[id]; if (!o) return;
+  const r = new Date(remindAt(o));
+  sheet(`<h3>${fresh ? '✓ המשלוח נשמר' : '📅 תזכורת'}</h3>
+    <p>${esc(o.chainName)} · ${whenText(o.when)}</p>
+    <p class="note">התזכורת לבדוק את המשלוח: ${whenText(r.getTime())}. כדי לקבל אותה גם כשהאפליקציה סגורה, כדאי להוסיף אותה ליומן:</p>
+    <div class="row-btns"><a class="btn primary" href="${esc(googleCalUrl(o))}" target="_blank" rel="noopener">יומן Google</a><button class="btn" value="ics">יומן באייפון (ics)</button><button class="btn ghost" value="close">סגירה</button></div>`,
+  (v) => { if (v === 'ics') downloadIcs(o); });
+}
+function verifyOrder(id) {
+  const o = S.orders[id]; if (!o || o.status !== 'pending') return;
+  const its = Object.keys(o.items).map(x => S.items[x]).filter(Boolean);
+  sheet(`<h3>📦 המשלוח מ${esc(o.chainName)}</h3>
+    <p class="note">מה הגיע כמו שהוזמן? מה שלא מסומן חוזר לרשימה.</p>
+    <ul class="list compact">${its.map(i => `<li><label class="check"><input type="checkbox" name="v" value="${i.id}" checked><span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${o.items[i.id] > 1 ? ` ×${o.items[i.id]}` : ''}</span></span></label></li>`).join('')}</ul>
+    <label class="field">היו החלפות או שינויים? (רשות)<input name="changes" placeholder="למשל: הביאו טופו של מותג אחר"></label>
+    <div class="row-btns"><button class="btn primary" value="ok">אישור</button><button class="btn" value="later">אחר כך</button></div>`,
+  (v, f) => {
+    if (v !== 'ok') return;
+    const ok = new Set([...f.querySelectorAll('input[name=v]:checked')].map(x => x.value));
+    for (const i of its) {
+      if (ok.has(i.id)) bought(i.id, o.when);
+      else S.items[i.id] = { ...S.items[i.id], ordered: '', need: true, note: [S.items[i.id].note, 'לא הגיע במשלוח'].filter(Boolean).join(' · '), at: now() };
+    }
+    S.orders[id] = { ...o, status: 'done', missing: its.filter(i => !ok.has(i.id)).map(i => i.id), changes: f.changes.value.trim(), at: now() };
+    save(); render();
+    const miss = its.length - ok.size;
+    toast(miss ? (miss === 1 ? 'מוצר אחד חזר לרשימה' : `${miss} מוצרים חזרו לרשימה`) : 'מעולה, הכול הגיע ✓');
+  });
+}
+function cancelOrder(id) {
+  const o = S.orders[id]; if (!o || !confirm('לבטל את המשלוח? המוצרים יחזרו לרשימה.')) return;
+  for (const x of Object.keys(o.items)) if (S.items[x] && S.items[x].ordered === id) S.items[x] = { ...S.items[x], ordered: '', at: now() };
+  S.orders[id] = { ...o, status: 'cancelled', at: now() };
+  save(); render();
+}
+// התראה כשהאפליקציה פתוחה (או ברקע) בזמן התזכורת
+function askNotify() { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {}); }
+function checkReminders() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  const shown = store.get('shop-notified') || {};
+  for (const o of pendingOrders()) {
+    if (now() < remindAt(o) || shown[o.id]) continue;
+    shown[o.id] = 1; store.set('shop-notified', shown);
+    const opts = { body: 'לבדוק שהגיע כל מה שהוזמן', tag: o.id, data: { url: appUrl(o) }, icon: 'icon-192.png' };
+    navigator.serviceWorker && navigator.serviceWorker.getRegistration ? navigator.serviceWorker.getRegistration().then(r => r ? r.showNotification(`המשלוח מ${o.chainName} הגיע?`, opts) : new Notification(`המשלוח מ${o.chainName} הגיע?`, opts)).catch(() => {}) : null;
+  }
 }
 
 // ---------- השוואת מחירים ----------
@@ -180,7 +410,7 @@ export function basket(items, compare, prefs = {}, fees = {}) {
   const totals = CHAINS.map(c => {
     const found = rows.filter(r => r.cells[c.id]);
     const f = Number.isFinite(fees[c.id]) ? fees[c.id] : DEFAULT_FEE;
-    return { chain: c, found: found.length, sum: found.reduce((s, r) => s + r.cells[c.id].total, 0), common: common.reduce((s, r) => s + r.cells[c.id].total, 0), fee: f };
+    return { chain: c, found: found.length, sum: found.reduce((s, r) => s + r.cells[c.id].total, 0), common: common.reduce((s, r) => s + (r.cells[c.id] ? r.cells[c.id].total : 0), 0), fee: f };
   }).filter(t => t.found);
   const maxFound = Math.max(0, ...totals.map(t => t.found));
   const ranked = [...totals].sort((a, b) => (a.common + a.fee) - (b.common + b.fee));
@@ -191,7 +421,7 @@ export function basket(items, compare, prefs = {}, fees = {}) {
 // שומרים רק את מה שצריך מכל תוצאה, כדי שההשוואה תעבור מהר לשאר המכשירים
 const slim = (list) => (list || []).slice(0, 6).map(p => ({ name: p.name, price: p.price, unit: p.unit || '', image: p.image || '', url: p.url || '', promo: p.promo || '', unitPrice: p.unitPrice || null }));
 async function runCompare() {
-  const list = needed();
+  const list = superNeeded();
   if (!list.length) return;
   comparing = { stage: 'prices', done: 0, total: list.length, failed: 0 };
   render();
@@ -238,7 +468,7 @@ async function runCompare() {
 }
 
 function compareView() {
-  const list = needed();
+  const list = superNeeded();
   const head = `<section class="hero"><h1>איפה כדאי להזמין?</h1><p>שופרסל · רמי לוי · קרפור · חצי חינם · משלוח לירושלים</p></section>`;
   if (comparing) return head + (comparing.stage === 'prices'
     ? `<div class="wait"><b>מחפש מחירים ומבצעים עדכניים…</b><div class="progress"><progress id="progress" max="${comparing.total}" value="${comparing.done}"></progress><span id="progress-t">${comparing.done}/${comparing.total}</span></div></div>`
@@ -300,12 +530,16 @@ function linksTable(list) {
 
 // ---------- הגדרות ----------
 function settingsView() {
-  const removed = Object.values(S.items).filter(i => i.deleted);
+  const removed = Object.values(S.items).filter(i => i.deleted && i.kind !== 'once');
   const install = standalone() ? '<p>✓ האפליקציה מותקנת במכשיר הזה.</p>'
     : installEvt ? '<button class="btn primary" data-install>התקנה בטלפון</button>'
     : isIOS() ? '<p>באייפון: לוחצים על כפתור השיתוף <b>⎋</b> בספארי ← <b>הוספה למסך הבית</b>.</p>'
     : '<p>בכרום: תפריט ⋮ ← <b>התקנת אפליקציה</b> (או "הוספה למסך הבית").</p>';
+  const done = Object.values(S.orders).filter(o => o.status === 'done').sort((a, b) => b.when - a.when).slice(0, 5);
   return `<section class="hero"><h1>הגדרות</h1><p>רשימה אחת לכל הבית – כל שינוי מופיע בכל המכשירים</p></section>
+    <div class="card"><h3>🙋 מי משתמש בטלפון הזה?</h3>
+      <label class="field inline">השם שלי<span class="row"><input id="me" value="${esc(me())}" placeholder="למשל: יעל" autocomplete="off"></span></label>
+      <p class="note">השם מופיע ליד מוצרים שהוספת, וכשאת/ה בקניות.</p></div>
     <div class="card"><h3>📲 התקנה בטלפון</h3>${install}
       <p>כדי שעוד מכשיר יראה את אותה רשימה, פשוט פותחים בו את הכתובת הזו:</p>
       <div class="code">${esc(location.origin + location.pathname)}</div>
@@ -315,28 +549,36 @@ function settingsView() {
     <div class="card"><h3>🚚 דמי משלוח משוערים</h3>
       ${CHAINS.map(c => `<label class="field inline">${c.name}<span class="row">₪<input type="number" min="0" step="0.1" inputmode="decimal" data-fee="${c.id}" value="${fee(c.id)}"></span></label>`).join('')}
     </div>
+    ${done.length ? `<div class="card"><h3>📦 משלוחים אחרונים</h3><ul class="plain">${done.map(o => `<li><b>${esc(o.chainName)}</b> · ${whenText(o.when)}${o.missing && o.missing.length ? ` · <span class="warn-t">לא הגיעו: ${o.missing.map(x => esc(S.items[x] ? S.items[x].name : '')).join(', ')}</span>` : ' · הכול הגיע'}${o.changes ? ` · ${esc(o.changes)}` : ''}</li>`).join('')}</ul></div>` : ''}
     <div class="card"><h3>🖼️ תמונות</h3><p>תמונות המוצרים נלקחות מאתרי הרשתות כשמחפשים מחירים.</p>
       <button class="btn ghost" data-noimgs>חזרה לאיורים</button></div>
-    <div class="card"><h3>🧺 מוצרים</h3><ul class="list compact">${live().sort((a, b) => a.name.localeCompare(b.name, 'he')).map(i => `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}</span><button class="icon" data-edit="${i.id}" aria-label="עריכה">✎</button></li>`).join('')}</ul>
+    <div class="card"><h3>🧺 מוצרים קבועים</h3><ul class="list compact">${live().filter(i => i.kind !== 'once').sort((a, b) => a.name.localeCompare(b.name, 'he')).map(i => { const c = cycleOf(i.hist, i.snooze); return `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}${c ? `<small>בערך כל ${c.every} ימים</small>` : ''}</span><button class="icon" data-edit="${i.id}" aria-label="עריכה">✎</button></li>`; }).join('')}</ul>
       <button class="btn wide" data-add="">מוצר חדש</button>
       ${removed.length ? `<details><summary>מוצרים שנמחקו (${removed.length})</summary><ul class="list compact">${removed.map(i => `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}</span><button class="btn" data-restore="${i.id}">החזרה</button></li>`).join('')}</ul></details>` : ''}
     </div>
-    <p class="note">הרשימה ההתחלתית: ${PRODUCTS.length} מוצרים שהופיעו לפחות 3 פעמים בקבוצה "קניות מקסימות".</p>`;
+    <p class="note">הרשימה ההתחלתית: ${PRODUCTS.length} מוצרים שהופיעו לפחות 3 פעמים בקבוצה "קניות מקסימות", וממנה גם הקצב ההתחלתי של כל מוצר.</p>`;
 }
 
 // ---------- עריכה / הוספה ----------
 function guessEmoji(name) { const h = EMOJI_HINTS.find(([re]) => re.test(name)); return h ? h[1] : ''; }
 function openEditor(id, name = '') {
-  const it = id === 'new' ? { id: 'new', name, cat: 'pantry', emoji: guessEmoji(name), q: '', note: '' } : S.items[id];
+  const isNew = id === 'new';
+  const it = isNew ? { id: 'new', name, cat: 'pantry', emoji: guessEmoji(name), q: '', note: '', kind: '' } : S.items[id];
+  const c = !isNew && cycleOf(it.hist, it.snooze);
   const dlg = $('#editor');
   dlg.innerHTML = `<form method="dialog" class="sheet">
-    <h3>${id === 'new' ? 'מוצר חדש' : 'עריכת מוצר'}</h3>
+    <h3>${isNew ? 'מוצר חדש' : 'עריכת מוצר'}</h3>
     <label class="field">שם<input name="name" required value="${esc(it.name)}" autocomplete="off"></label>
+    <fieldset class="seg"><legend>זה מוצר…</legend>
+      <label><input type="radio" name="kind" value="once" required${it.kind === 'once' ? ' checked' : ''}><span>חד פעמי<small>יורד אחרי שקונים</small></span></label>
+      <label><input type="radio" name="kind" value="fixed" required${it.kind === 'fixed' || (!isNew && !it.kind) ? ' checked' : ''}><span>קבוע<small>נשאר במסך "מה חסר"</small></span></label>
+    </fieldset>
     <label class="field">קטגוריה<select name="cat">${CATS.map(c => `<option value="${c.id}"${c.id === it.cat ? ' selected' : ''}>${c.icon} ${esc(c.name)}</option>`).join('')}</select></label>
     <label class="field">סמל (אימוג'י)<input name="emoji" value="${esc(it.emoji || '')}" maxlength="4" placeholder="${catOf(it.cat).icon}"></label>
     <label class="field">מה לחפש באתרי הרשתות<input name="q" value="${esc(it.q || '')}" placeholder="${esc(it.name || 'למשל: חלב 3% 1 ליטר')}"></label>
     <label class="field">הערה<input name="note" value="${esc(it.note || '')}" placeholder="למשל: בלי גלעין, 1 ק״ג"></label>
-    <div class="row-btns"><button class="btn primary" value="save">שמירה</button><button class="btn" value="cancel" formnovalidate>ביטול</button>${id !== 'new' ? '<button class="btn danger" value="delete" formnovalidate>מחיקה</button>' : ''}</div>
+    ${c ? `<p class="note">⏳ נקנה בערך כל ${c.every} ימים · לאחרונה לפני ${c.since} ימים</p>` : ''}
+    <div class="row-btns"><button class="btn primary" value="save">שמירה</button><button class="btn" value="cancel" formnovalidate>ביטול</button>${!isNew ? '<button class="btn danger" value="delete" formnovalidate>מחיקה</button>' : ''}</div>
   </form>`;
   const form = $('form', dlg);
   form.name.addEventListener('input', () => { if (!form.emoji.value) form.emoji.placeholder = guessEmoji(form.name.value) || catOf(form.cat.value).icon; });
@@ -345,11 +587,11 @@ function openEditor(id, name = '') {
     if (v === 'delete') { touch(id, { deleted: true, need: false }); toast('נמחק. אפשר להחזיר מההגדרות'); return; }
     if (v !== 'save') return;
     const nm = form.name.value.trim(); if (!nm) return;
-    const data = { name: nm, cat: form.cat.value, emoji: form.emoji.value.trim() || guessEmoji(nm), q: form.q.value.trim(), note: form.note.value.trim() };
-    if (id === 'new') {
+    const data = { name: nm, kind: form.kind.value || 'fixed', cat: form.cat.value, emoji: form.emoji.value.trim() || guessEmoji(nm), q: form.q.value.trim(), note: form.note.value.trim() };
+    if (isNew) {
       const nid = 'u' + now().toString(36) + Math.random().toString(36).slice(2, 5);
-      S.items[nid] = { id: nid, ...data, count: 0, need: true, qty: 1, got: false, at: now() };
-      filter = ''; save(); render(); toast(`"${nm}" נוסף לרשימה`);
+      S.items[nid] = { id: nid, ...data, count: 0, need: true, qty: 1, got: false, hist: [], by: me(), at: now() };
+      filter = ''; save(); render(); toast(`"${nm}" נוסף לרשימה${data.kind === 'once' ? ' (חד פעמי)' : ''}`);
     } else touch(id, data);
   };
   dlg.returnValue = '';
@@ -372,19 +614,37 @@ async function install() {
   if (installEvt) { installEvt.prompt(); const r = await installEvt.userChoice.catch(() => null); installEvt = null; if (r && r.outcome === 'accepted') toast('האפליקציה הותקנה 🎉'); render(); }
   else { view = 'settings'; S.view = view; save(false); render(); }
 }
+function setNeed(id, on) {
+  const i = S.items[id];
+  touch(id, { need: on, got: false, qty: on ? (i.qty || 1) : 1, by: on ? me() : i.by, snooze: 0 });
+}
 
 // ---------- אירועים ----------
 document.addEventListener('click', (e) => {
   const t = e.target.closest('button');
-  if (!t) return;
+  if (!t || t.closest('dialog')) return;
   const d = t.dataset;
   if (d.v || d.go) { view = d.v || d.go; S.view = view; save(false); render(); scrollTo(0, 0); }
-  else if (d.toggle) { const i = S.items[d.toggle]; touch(d.toggle, { need: !i.need, got: false, qty: i.need ? 1 : (i.qty || 1) }); if (navigator.vibrate) navigator.vibrate(10); }
+  else if (d.toggle) {
+    const i = S.items[d.toggle];
+    if (isOrdered(i)) { toast(`"${i.name}" כבר בדרך במשלוח`); return; }
+    setNeed(d.toggle, !i.need); if (navigator.vibrate) navigator.vibrate(10);
+  }
   else if (d.cat !== undefined && t.classList.contains('chip')) { catFilter = d.cat; render(); }
   else if (d.add !== undefined) openEditor('new', d.add);
   else if (d.edit) openEditor(d.edit);
   else if (d.qty) { const i = S.items[d.qty]; touch(d.qty, { qty: Math.max(1, Math.min(99, (i.qty || 1) + Number(d.d))) }); }
-  else if ('done' in d) { for (const i of needed().filter(i => i.got)) S.items[i.id] = { ...i, need: false, got: false, qty: 1, at: now() }; save(); render(); toast('יופי! הרשימה עודכנה'); }
+  else if (d.cart) { const i = S.items[d.cart]; touch(d.cart, { got: !i.got }); if (navigator.vibrate) navigator.vibrate(10); }
+  else if ('startShop' in d) startShop();
+  else if ('stopShop' in d) stopShop();
+  else if ('checkout' in d) checkout();
+  else if ('startDelivery' in d) startDelivery();
+  else if (d.verify) verifyOrder(d.verify);
+  else if (d.remind) reminderSheet(d.remind);
+  else if (d.cancelOrder) cancelOrder(d.cancelOrder);
+  else if (d.soonAdd) setNeed(d.soonAdd, true);
+  else if (d.snooze) { touch(d.snooze, { snooze: now() }); toast('נרשם. נזכיר שוב בסבב הבא'); }
+  else if ('addsoon' in d) { for (const { i } of runningOut()) S.items[i.id] = { ...i, need: true, by: me(), snooze: 0, at: now() }; save(); render(); toast('נוסף לרשימה'); }
   else if ('clear' in d) { if (confirm('לנקות את כל הרשימה?')) { for (const i of needed()) S.items[i.id] = { ...i, need: false, got: false, qty: 1, at: now() }; save(); render(); } }
   else if ('share' in d) share(shareText());
   else if ('compare' in d) runCompare();
@@ -399,20 +659,34 @@ document.addEventListener('input', (e) => {
 });
 document.addEventListener('change', (e) => {
   const t = e.target;
-  if (t.dataset.got) touch(t.dataset.got, { got: t.checked });
-  else if (t.dataset.pref) { S.prefs[t.dataset.pref] = { name: t.value, at: now() }; save(); render(); }
+  if (t.closest('dialog')) return;
+  if (t.dataset.pref) { S.prefs[t.dataset.pref] = { name: t.value, at: now() }; save(); render(); }
   else if (t.dataset.fee) { const n = Number(t.value); S.fees[t.dataset.fee] = { value: Number.isFinite(n) && n >= 0 ? n : DEFAULT_FEE, at: now() }; save(); }
+  else if (t.id === 'me') { store.set('shop-me', t.value.trim()); toast('נשמר'); }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && e.target.id === 'q' && filter.trim()) {
     const f = filter.trim(), hit = live().find(i => i.name === f);
-    if (hit) { filter = ''; touch(hit.id, { need: true }); toast(`"${f}" ברשימה`); } else openEditor('new', f);
+    if (hit) { filter = ''; setNeed(hit.id, true); toast(`"${f}" ברשימה`); } else openEditor('new', f);
   }
 });
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if (view === 'home' || view === 'settings') render(); });
-document.addEventListener('visibilitychange', () => { if (!document.hidden) sync(); });
-setInterval(() => { if (!document.hidden && !syncing) sync(); }, POLL_MS);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) { sync(); checkReminders(); } });
+let lastRemindRender = 0;
+setInterval(() => {
+  if (!document.hidden && !syncing) sync();
+  checkReminders();
+  // כשמגיע זמן הבדיקה של משלוח, הבאנר מופיע בלי לרענן
+  const due = pendingOrders().filter(o => now() >= remindAt(o)).length;
+  if (due !== lastRemindRender && !document.querySelector('dialog[open]') && document.activeElement?.id !== 'q') { lastRemindRender = due; render(); }
+}, POLL_MS);
 
+lastRemindRender = pendingOrders().filter(o => now() >= remindAt(o)).length;
 render();
-sync();
+sync().then(() => {
+  // קישור מהתזכורת ביומן: ?verify=<משלוח>
+  const v = new URLSearchParams(location.search).get('verify');
+  if (v) { history.replaceState(null, '', location.pathname); view = 'list'; render(); verifyOrder(v); }
+});
+checkReminders();
 if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
