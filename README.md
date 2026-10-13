@@ -4,7 +4,7 @@
 
 - **מה חסר** – אריחים של המוצרים שקונים תמיד. לוחצים על מה שנגמר והוא עובר לרשימה.
 - **הרשימה** – כמויות, סימון מה כבר בסל, שליחה בווטסאפ.
-- **איפה כדאי להזמין** – בלחיצה בלבד: חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם (משלוחים לירושלים), ו-Claude משווה בין המוצרים (גודל, מותג, מחיר ליחידה, מבצעים) וממליץ איפה להזמין.
+- **איפה כדאי להזמין** – בלחיצה בלבד: חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם (משלוחים לירושלים), והמלצה איפה להזמין לפי סל משותף + משלוח, עם מחיר ליחידה ומבצעים. (ניתוח של Claude מוכן בשרת וכבוי בינתיים.)
 - **רשימה אחת לכל הבית** – כל מכשיר שפותח את הכתובת רואה את אותה רשימה, והשינויים מופיעים בשאר המכשירים תוך כמה שניות.
 
 רשימת הפתיחה: 44 המוצרים שהופיעו לפחות 3 פעמים בקבוצת הווטסאפ "קניות מקסימות".
@@ -18,9 +18,9 @@
 | `tests/test.mjs` | בדיקות לשרת ולאפליקציה (`npm test`) |
 
 ## הפעלה
-1. **GitHub Pages:** Settings ← Pages ← Deploy from a branch ← `main` / root. הכתובת: `https://yuvsaadon-coder.github.io/shopping/`.
+1. **GitHub Pages:** מתפרסם אוטומטית בכל push ל-`main` (`.github/workflows/pages.yml`). אם הפעולה נכשלת בהפעלה הראשונה: Settings ← Pages ← Source: GitHub Actions. הכתובת: `https://yuvsaadon-coder.github.io/shopping/`.
 2. **השרת ב-Cloudflare:** Workers & Pages ← Create ← Import a repository ← `shopping`. ההגדרות נקראות מ-`wrangler.jsonc` (שם השרת `shopping`, ה-KV של "מה שנקרא").
-3. **Claude (רשות):** ב-Settings ← Build ← Variables and secrets של השרת, להוסיף `ANTHROPIC_API_KEY` כ-Build secret. בלי מפתח ההשוואה עובדת לפי מחיר בלבד.
+3. **Claude (כבוי בינתיים, `USE_AI` ב-`app.js`):** ב-Settings ← Build ← Variables and secrets של השרת, להוסיף `ANTHROPIC_API_KEY` כ-Build secret. בלי מפתח ההשוואה עובדת לפי מחיר בלבד.
 
 אם כתובת השרת שונה מ-`https://shopping.yuvsaadon.workers.dev`, אפשר לקבוע אותה בדפדפן: `localStorage.setItem('shop-server', '<כתובת>')`.
 

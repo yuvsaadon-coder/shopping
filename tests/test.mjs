@@ -199,23 +199,24 @@ assert.deepEqual(server.priceCalls, [], 'no automatic price search');
 await a.getByRole('button', { name: /חיפוש מחירים ל-4 מוצרים/ }).click();
 await a.locator('.rec').waitFor();
 assert.equal(server.priceCalls.length, 4); assert.ok(server.priceCalls.every(q => q.endsWith('!')), 'always fresh prices');
-assert.equal(server.adviceCalls.length, 1);
-assert.equal(server.adviceCalls[0].items.find(i => i.id === 'eggs').qty, 2); assert.equal(server.adviceCalls[0].fees.rami, 30);
-assert.match(await a.locator('.rec').textContent(), /רמי לוי[\s\S]*ברמי לוי הסל הכי זול[\s\S]*מבצע הטופו/);
+assert.equal(server.adviceCalls.length, 0, 'Claude analysis is off for now');
+// בלי Claude: ההמלצה לפי הסל המשותף (טופו + שרי, כי בקרפור אין ביצים) + משלוח: רמי 18+30, שופרסל 21+30
+assert.match(await a.locator('.rec').textContent(), /הכי משתלם: רמי לוי[\s\S]*₪48[\s\S]*זול ב-₪3 משופרסל[\s\S]*מוצר אחד לא נמצא/);
 assert.match(await a.locator('.checked').textContent(), /נבדק עכשיו/);
-// ביצים ×2: Claude פסל את הביצים של חצי חינם, אז הזול בשורה הוא רמי לוי 52
+// ביצים ×2: הזול בשורה חצי חינם 50
 const eggs = a.locator('tr', { hasText: 'ביצים' });
-assert.match(await eggs.locator('td.min').textContent(), /₪52/);
-assert.match(await eggs.locator('td').nth(3).textContent(), /לא נמצא/);
-// מבצע והערה של Claude בתא
+assert.match(await eggs.locator('td.min').textContent(), /₪50/);
+assert.match(await eggs.locator('td').nth(2).textContent(), /לא נמצא/);
+// מבצע ומחיר ליחידה בתא
 const tofuHazi = a.locator('tr', { hasText: 'טופו' }).locator('td').nth(3);
-assert.match(await tofuHazi.textContent(), /2 ב-22[\s\S]*במבצע 2 ב-22/);
+assert.match(await tofuHazi.textContent(), /₪4\.33 ל-100 גרם[\s\S]*2 ב-22/);
 assert.match(await a.locator('tr', { hasText: 'במבה' }).textContent(), /לא נמצא/);
 assert.ok(await a.locator('tr', { hasText: 'טופו' }).locator('.art.img img').count(), 'store image used');
 if (process.env.SHOTS) await a.screenshot({ path: `${process.env.SHOTS}/prices.png`, fullPage: true });
-// בחירה ידנית של מוצר אחר גוברת על Claude
+// בחירה ידנית של מוצר אחר
 await a.locator('select[data-pref="tofu|shufersal"]').selectOption('משהו אחר');
 assert.match(await a.locator('tr', { hasText: 'טופו' }).locator('td').first().textContent(), /₪1/);
+assert.match(await a.locator('.rec').textContent(), /הכי משתלם: שופרסל/, 'manual ₪1 tofu makes Shufersal cheapest');
 // המכשיר השני מקבל את ההשוואה בלי לחפש שוב
 await b.getByRole('button', { name: /איפה זול/ }).click();
 await b.locator('.rec').waitFor({ timeout: 15000 });
@@ -226,11 +227,9 @@ await a.click('[data-toggle="garlic"]');
 await a.getByRole('button', { name: /איפה זול/ }).click();
 assert.match(await a.locator('.checked').textContent(), /הרשימה השתנתה מאז/);
 assert.match(await a.locator('main').textContent(), /מוצר אחד נוסף אחרי החיפוש: שום/);
-// בלי Claude: עדיין יש המלצה לפי מחיר
-server.adviceOff = true;
 await a.getByRole('button', { name: /חיפוש מחדש/ }).click();
 await a.locator('.rec').waitFor();
-assert.match(await a.locator('.rec').textContent(), /הכי משתלם: שופרסל[\s\S]*לא מוגדר/, 'manual ₪1 tofu makes Shufersal cheapest');
+assert.equal(server.priceCalls.length, 9);
 // דמי משלוח מההגדרות
 await a.getByRole('button', { name: /הגדרות/ }).click();
 await a.locator('input[data-fee="rami"]').fill('0');

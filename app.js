@@ -1,10 +1,11 @@
 // קניות בבית: מה חסר, רשימה אחת לכל הבית (מסתנכרנת בין המכשירים),
-// ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם, וניתוח של Claude איפה כדאי להזמין.
+// ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם, והמלצה איפה כדאי להזמין.
 import { CATS, PRODUCTS, EMOJI_HINTS } from './products.js';
 
 const SERVER = (() => { try { return localStorage.getItem('shop-server') || 'https://shopping.yuvsaadon.workers.dev'; } catch (e) { return 'https://shopping.yuvsaadon.workers.dev'; } })();
 const KEY = 'shop-state-v2';
 const POLL_MS = 10000;
+const USE_AI = false;   // הניתוח של Claude (/advice) כבוי בינתיים; ההמלצה לפי מחיר, סל משותף ומשלוח
 export const CHAINS = [
   { id: 'shufersal', name: 'שופרסל', color: '#d8232a', url: 'https://www.shufersal.co.il/online/he/search?text=' },
   { id: 'rami', name: 'רמי לוי', color: '#0a58a8', url: 'https://www.rami-levy.co.il/he/online/search?q=' },
@@ -220,9 +221,9 @@ async function runCompare() {
     toast('אין חיבור לשרת המחירים. אפשר לחפש בכל רשת דרך הקישורים');
     return;
   }
-  comparing.stage = 'advice'; render();
-  let advice = null, adviceError = '';
-  try {
+  let advice = null, adviceError = USE_AI ? '' : 'off';
+  if (USE_AI) try {
+    comparing.stage = 'advice'; render();
     const r = await fetch(SERVER + '/advice', { method: 'POST', body: JSON.stringify({
       items: list.filter(i => prices[i.id]).map(i => ({ id: i.id, name: i.name, qty: i.qty || 1, note: i.note || '' })),
       prices, fees: Object.fromEntries(CHAINS.map(c => [c.id, fee(c.id)])) }) });
@@ -257,7 +258,7 @@ function compareView() {
       ${A.split ? `<p class="split">✂️ ${esc(A.split)}</p>` : ''}
       ${A.tips && A.tips.length ? `<ul class="tips">${A.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
     </div>` : b.best ? `<div class="rec"><div class="rec-h">🏆 הכי משתלם: <b>${b.best.chain.name}</b></div>
-      <p class="note">${C.adviceError === 'no_key' ? 'הניתוח של Claude לא מוגדר בשרת, ' : 'הניתוח של Claude לא הצליח הפעם, '}לכן ההשוואה לפי מחיר בלבד.</p></div>` : '';
+      <p>${recText(b)}</p></div>` : '';
   const cards = b.totals.map(t => `
     <div class="chain${bestChain && t.chain.id === bestChain.id ? ' best' : ''}" style="--c:${t.chain.color}">
       <div class="chain-h"><b>${t.chain.name}</b>${bestChain && t.chain.id === bestChain.id ? '<span class="tag">מומלץ</span>' : ''}</div>
@@ -280,6 +281,18 @@ function compareView() {
   return head + `<p class="checked">נבדק ${ago(C.at)}${stale ? ' · <b>הרשימה השתנתה מאז</b>' : ''}</p>` + btn + adviceCard + `<div class="chains">${cards}</div>` +
     (unchecked.length ? `<p class="note">${unchecked.length === 1 ? 'מוצר אחד נוסף' : unchecked.length + ' מוצרים נוספו'} אחרי החיפוש: ${unchecked.map(i => esc(i.name)).join(', ')}</p>` : '') + table +
     `<p class="note">המחירים והמבצעים מאתרי הרשתות בזמן החיפוש. מבצעי מועדון ודמי משלוח מדויקים מופיעים רק בקופה; דמי המשלוח המשוערים נקבעים בהגדרות. אפשר לבחור מוצר אחר בכל תא.</p>`;
+}
+// ההמלצה בלי Claude: הזולה בסל המשותף כולל משלוח, ובכמה היא זולה מהבאה אחריה
+function recText(b) {
+  const best = b.best, rest = b.totals.filter(t => t !== best);
+  const next = rest[0];
+  const parts = [`סל משותף של ${b.commonCount} מוצרים + משלוח: ${money(best.common + best.fee)}`];
+  if (next) { const d = (next.common + next.fee) - (best.common + best.fee); if (d >= 1) parts.push(`זול ב-${money(d)} מ${next.chain.name}`); }
+  const miss = b.rows.length - best.found;
+  if (miss) parts.push(miss === 1 ? 'מוצר אחד לא נמצא שם' : `${miss} מוצרים לא נמצאו שם`);
+  const promos = b.rows.filter(r => r.cells[best.chain.id] && r.cells[best.chain.id].promo).length;
+  if (promos) parts.push(promos === 1 ? 'מוצר אחד במבצע' : `${promos} מוצרים במבצע`);
+  return esc(parts.join(' · ')) + '.';
 }
 function linksTable(list) {
   return `<h2 class="cat">חיפוש ידני בכל רשת</h2><ul class="list links">${list.map(i => `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}</span><span class="lk">${CHAINS.map(c => `<a style="--c:${c.color}" href="${searchUrl(c, i)}" target="_blank" rel="noopener">${c.name}</a>`).join('')}</span></li>`).join('')}</ul>`;
@@ -322,7 +335,7 @@ function openEditor(id, name = '') {
     <label class="field">קטגוריה<select name="cat">${CATS.map(c => `<option value="${c.id}"${c.id === it.cat ? ' selected' : ''}>${c.icon} ${esc(c.name)}</option>`).join('')}</select></label>
     <label class="field">סמל (אימוג'י)<input name="emoji" value="${esc(it.emoji || '')}" maxlength="4" placeholder="${catOf(it.cat).icon}"></label>
     <label class="field">מה לחפש באתרי הרשתות<input name="q" value="${esc(it.q || '')}" placeholder="${esc(it.name || 'למשל: חלב 3% 1 ליטר')}"></label>
-    <label class="field">הערה (גם Claude מתחשב בה)<input name="note" value="${esc(it.note || '')}" placeholder="למשל: בלי גלעין, 1 ק״ג"></label>
+    <label class="field">הערה<input name="note" value="${esc(it.note || '')}" placeholder="למשל: בלי גלעין, 1 ק״ג"></label>
     <div class="row-btns"><button class="btn primary" value="save">שמירה</button><button class="btn" value="cancel" formnovalidate>ביטול</button>${id !== 'new' ? '<button class="btn danger" value="delete" formnovalidate>מחיקה</button>' : ''}</div>
   </form>`;
   const form = $('form', dlg);
