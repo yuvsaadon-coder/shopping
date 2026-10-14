@@ -21,7 +21,7 @@
 - **צילום קבלה / מוצרים** (`runScan` → `receiptSheet`): בסיום קניות, בבדיקת משלוח, וב"קניתי – סריקת קבלה" ברשימה. התמונות מוקטנות במכשיר ונשלחות ל-Claude (`claude-opus-5`, structured output) **דרך השרת של "מה שנקרא"** (`AI_SERVER`, `/v1/messages`, אותו אתר ב-CORS; נספר במכסה היומית שלו, 150). Claude מתאים כל שורה ל-id ברשימת המוצרים; מאשרים או מתקנים; מחיר מהקבלה נשמר ב-`item.prices`.
 - `now()` עולה תמיד (גם באותה אלפית שנייה), כדי שהשינוי האחרון ינצח במיזוג.
 
-## השרת (`worker/worker.js`, Cloudflare Worker `shopping`)
+## השרת (`worker/worker.js`, Cloudflare Worker `kniyot`)
 - `/list`, `/compare` – ב-KV `LIBRARY` (משותף עם "מה שנקרא"; מפתחות `shoplist:*`).
 - `/prices` – מפענחים לכל רשת (`parseShufersal`, `parseRami`, `parseHtmlProducts`), `parseSize`/`unitPrice` למחיר ליחידה, `promoText` למבצעים. מטמון 30 דקות, `fresh=1` עוקף.
 - `/advice` – Claude (`claude-opus-5-5`, structured output, `fallbacks: "default"`), עד 40 ביום. בחירה שלא מצביעה על מוצר אמיתי נזרקת.

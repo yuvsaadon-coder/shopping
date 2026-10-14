@@ -117,7 +117,7 @@ const PRICES = {   // קרפור לא מוצאת ביצים
 };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 async function mock(ctx) {
-  await ctx.route('https://shopping.yuvsaadon.workers.dev/**', async (route) => {
+  await ctx.route('https://kniyot.yuvsaadon.workers.dev/**', async (route) => {
     const u = new URL(route.request().url()), method = route.request().method();
     const h = { 'access-control-allow-origin': '*' };
     if (u.pathname === '/list') {
@@ -357,8 +357,8 @@ await a.locator('details summary').click();
 await a.getByRole('button', { name: 'החזרה' }).click();
 assert.ok(await a.locator('.compact li', { hasText: 'שום' }).count());
 // שרת לא זמין: האפליקציה ממשיכה לעבוד מהטלפון
-await a.context().unroute('https://shopping.yuvsaadon.workers.dev/**');
-await a.context().route('https://shopping.yuvsaadon.workers.dev/**', r => r.abort());
+await a.context().unroute('https://kniyot.yuvsaadon.workers.dev/**');
+await a.context().route('https://kniyot.yuvsaadon.workers.dev/**', r => r.abort());
 await a.getByRole('button', { name: /מה חסר/ }).click();
 await a.click('[data-toggle="mushrooms"]');
 await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'off');

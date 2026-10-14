@@ -3,7 +3,7 @@
 // ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם, והמלצה איפה כדאי להזמין.
 import { CATS, PRODUCTS, EMOJI_HINTS, STORES, storeOf, SEEN } from './products.js';
 
-const SERVER = (() => { try { return localStorage.getItem('shop-server') || 'https://shopping.yuvsaadon.workers.dev'; } catch (e) { return 'https://shopping.yuvsaadon.workers.dev'; } })();
+const SERVER = (() => { try { return localStorage.getItem('shop-server') || 'https://kniyot.yuvsaadon.workers.dev'; } catch (e) { return 'https://kniyot.yuvsaadon.workers.dev'; } })();
 const KEY = 'shop-state-v2';
 const POLL_MS = 10000;
 const USE_AI = false;   // הניתוח של Claude (/advice) כבוי בינתיים; ההמלצה לפי מחיר, סל משותף ומשלוח
