@@ -1,4 +1,4 @@
-// השרת של אפליקציית הקניות (Cloudflare Worker "kniyot")
+// השרת של אפליקציית הקניות (Cloudflare Worker "shopping123")
 //   GET  /ping              מה מוגדר
 //   GET  /list              הרשימה המשותפת לכל המכשירים
 //   PUT  /list              מיזוג: לכל מוצר נשמרת הגרסה עם at המאוחר יותר

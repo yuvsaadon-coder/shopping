@@ -24,10 +24,10 @@
 
 ## הפעלה
 1. **GitHub Pages:** מתפרסם אוטומטית בכל push ל-`main` (`.github/workflows/pages.yml`). אם הפעולה נכשלת בהפעלה הראשונה: Settings ← Pages ← Source: GitHub Actions. הכתובת: `https://yuvsaadon-coder.github.io/shopping/`.
-2. **השרת ב-Cloudflare:** Workers & Pages ← Create ← Import a repository ← `shopping`. ההגדרות נקראות מ-`wrangler.jsonc` (שם השרת `kniyot`, ה-KV של "מה שנקרא").
+2. **השרת ב-Cloudflare:** Workers & Pages ← Create ← Import a repository ← `shopping`. ההגדרות נקראות מ-`wrangler.jsonc` (שם השרת `shopping123`, ה-KV של "מה שנקרא").
 3. **Claude (כבוי בינתיים, `USE_AI` ב-`app.js`):** ב-Settings ← Build ← Variables and secrets של השרת, להוסיף `ANTHROPIC_API_KEY` כ-Build secret. בלי מפתח ההשוואה עובדת לפי מחיר בלבד.
 
-אם כתובת השרת שונה מ-`https://kniyot.yuvsaadon.workers.dev`, אפשר לקבוע אותה בדפדפן: `localStorage.setItem('shop-server', '<כתובת>')`.
+אם כתובת השרת שונה מ-`https://shopping123.yuvsaadon.workers.dev`, אפשר לקבוע אותה בדפדפן: `localStorage.setItem('shop-server', '<כתובת>')`.
 
 ## לא נבדק מול האתרים האמיתיים
 סביבת הפיתוח חוסמת את אתרי הרשתות, ולכן החיפוש נבדק רק מול תשובות מדומות:

@@ -1,6 +1,6 @@
 // הגדרות הפרסום של השרת ב-Cloudflare (Workers Builds מפרסם אותו בכל push ל-main)
 {
-  "name": "kniyot",
+  "name": "shopping123",
   "main": "worker/worker.js",
   "compatibility_date": "2025-09-01",
   "observability": { "enabled": true },

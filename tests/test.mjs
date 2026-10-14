@@ -117,7 +117,7 @@ const PRICES = {   // קרפור לא מוצאת ביצים
 };
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 async function mock(ctx) {
-  await ctx.route('https://kniyot.yuvsaadon.workers.dev/**', async (route) => {
+  await ctx.route('https://shopping123.yuvsaadon.workers.dev/**', async (route) => {
     const u = new URL(route.request().url()), method = route.request().method();
     const h = { 'access-control-allow-origin': '*' };
     if (u.pathname === '/list') {
@@ -357,13 +357,25 @@ await a.locator('details summary').click();
 await a.getByRole('button', { name: 'החזרה' }).click();
 assert.ok(await a.locator('.compact li', { hasText: 'שום' }).count());
 // שרת לא זמין: האפליקציה ממשיכה לעבוד מהטלפון
-await a.context().unroute('https://kniyot.yuvsaadon.workers.dev/**');
-await a.context().route('https://kniyot.yuvsaadon.workers.dev/**', r => r.abort());
+await a.context().unroute('https://shopping123.yuvsaadon.workers.dev/**');
+await a.context().route('https://shopping123.yuvsaadon.workers.dev/**', r => r.abort());
 await a.getByRole('button', { name: /מה חסר/ }).click();
 await a.click('[data-toggle="mushrooms"]');
 await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'off');
 assert.equal(await count(a), '3');
 if (process.env.SHOTS) for (const v of ['home', 'list', 'settings']) { await b.evaluate((v) => document.querySelector(`nav [data-v="${v}"]`).click(), v); await b.waitForTimeout(300); await b.screenshot({ path: `${process.env.SHOTS}/${v}.png`, fullPage: true }); }
+// אם השרת פעיל בשם shopping (ולא kniyot), האפליקציה מוצאת אותו לבד
+const c = await phone('יעל');
+await c.context().unroute('https://shopping123.yuvsaadon.workers.dev/**');
+await c.context().route('https://shopping123.yuvsaadon.workers.dev/**', r => r.abort());
+await c.context().route('https://shopping.yuvsaadon.workers.dev/**', async (route) => {
+  const u = new URL(route.request().url());
+  if (u.pathname === '/ping') return route.fulfill({ json: { ok: true, kv: true }, headers: { 'access-control-allow-origin': '*' } });
+  return route.fulfill({ json: { ...(server.list || {}), compareAt: 0 }, headers: { 'access-control-allow-origin': '*' } });
+});
+await c.goto(BASE);
+await c.waitForFunction(() => document.querySelector('#sync').dataset.s === 'ok', null, { timeout: 20000 });
+assert.equal(await c.evaluate(() => localStorage.getItem('shop-server')), 'https://shopping.yuvsaadon.workers.dev');
 assert.deepEqual(errors, []);
 await browser.close();
 http.close();

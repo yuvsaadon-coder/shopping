@@ -3,7 +3,22 @@
 // ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם, והמלצה איפה כדאי להזמין.
 import { CATS, PRODUCTS, EMOJI_HINTS, STORES, storeOf, SEEN } from './products.js';
 
-const SERVER = (() => { try { return localStorage.getItem('shop-server') || 'https://kniyot.yuvsaadon.workers.dev'; } catch (e) { return 'https://kniyot.yuvsaadon.workers.dev'; } })();
+// השרת ב-Cloudflare: shopping123 (או kniyot / shopping אם אחד מהם הוא הפעיל). נבחר לפי מי שעונה ל-/ping.
+const SERVERS = ['https://shopping123.yuvsaadon.workers.dev', 'https://kniyot.yuvsaadon.workers.dev', 'https://shopping.yuvsaadon.workers.dev'];
+let SERVER = (() => { try { return localStorage.getItem('shop-server') || SERVERS[0]; } catch (e) { return SERVERS[0]; } })();
+let lastFind = 0;
+async function findServer() {
+  if (now() - lastFind < 60000) return false;
+  lastFind = now();
+  for (const u of SERVERS) {
+    try {
+      const r = await fetch(u + '/ping', { signal: AbortSignal.timeout(5000) });
+      const d = r.ok ? await r.json() : null;
+      if (d && d.ok && d.kv) { if (u !== SERVER) { SERVER = u; try { localStorage.setItem('shop-server', u); } catch (e) { /* חסום */ } } return true; }
+    } catch (e) { /* לא עונה */ }
+  }
+  return false;
+}
 const KEY = 'shop-state-v2';
 const POLL_MS = 10000;
 const USE_AI = false;   // הניתוח של Claude (/advice) כבוי בינתיים; ההמלצה לפי מחיר, סל משותף ומשלוח
@@ -135,6 +150,7 @@ async function sync() {
   } catch (e) {
     syncState = 'off';
     if (send) dirty = true;
+    findServer().then(found => { if (found) scheduleSync(); });
     if (sendCompare) compareDirty = true;
   }
   syncing = false;
