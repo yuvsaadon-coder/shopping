@@ -150,7 +150,11 @@ h2.store { font-size: 18px; margin: 22px 0 0; padding-bottom: 4px; border-bottom
 .seg input:focus-visible + span { outline: 3px solid var(--accent); }
 .plain { margin: 0; padding-inline-start: 18px; font-size: 14px; } .plain li { margin: 4px 0; } .warn-t { color: var(--danger); }
 .scan-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; } .sheet .scan-btn { width: 100%; margin: 10px 0 0; border-style: dashed; }
-.sheet a.btn { text-decoration: none; display: inline-block; }
+.claude { background: var(--card); border-radius: 16px; padding: 4px 14px 10px; margin: 0 0 12px; box-shadow: var(--shadow); } .claude h2 { margin-top: 12px; } .claude p { margin: 6px 0; }
+.cbox { border: 1px solid var(--line); border-top: 4px solid var(--c); border-radius: 12px; padding: 10px; margin: 10px 0 0; }
+.cbox-h { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 14px; } .cbox-h span { color: var(--muted); }
+.cbox textarea { width: 100%; margin-top: 8px; font: 13px/1.5 inherit; font-family: inherit; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--ink); padding: 8px; resize: vertical; }
+.claude a.btn, .sheet a.btn { text-decoration: none; display: inline-block; }
 .sheet .list { max-height: 45vh; overflow: auto; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 </style>

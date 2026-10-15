@@ -530,9 +530,66 @@ function compareView() {
         ${res.length > 1 ? `<select data-pref="${r.item.id}|${c.id}" aria-label="מוצר אחר ב${c.name}">${res.map(o => `<option value="${esc(o.name)}"${o.name === x.name ? ' selected' : ''}>${esc(o.name)} – ${money(o.price)}</option>`).join('')}</select>` : `<div class="pn">${esc(x.name)}</div>`}
         <a class="pn" href="${esc(x.url || searchUrl(c, r.item))}" target="_blank" rel="noopener">לאתר ↗</a></td>`;
     }).join('')}</tr>`).join('')}</tbody></table></div>`;
-  return head + `<p class="checked">נבדק ${ago(C.at)}${stale ? ' · <b>הרשימה השתנתה מאז</b>' : ''}</p>` + btn + adviceCard + `<div class="chains">${cards}</div>` +
+  return head + `<p class="checked">נבדק ${ago(C.at)}${stale ? ' · <b>הרשימה השתנתה מאז</b>' : ''}</p>` + btn + adviceCard + claudeBox(b, list) + `<div class="chains">${cards}</div>` +
     (unchecked.length ? `<p class="note">${unchecked.length === 1 ? 'מוצר אחד נוסף' : unchecked.length + ' מוצרים נוספו'} אחרי החיפוש: ${unchecked.map(i => esc(i.name)).join(', ')}</p>` : '') + table +
     `<p class="note">המחירים והמבצעים מאתרי הרשתות בזמן החיפוש. מבצעי מועדון ודמי משלוח מדויקים מופיעים רק בקופה; דמי המשלוח המשוערים נקבעים בהגדרות. אפשר לבחור מוצר אחר בכל תא.</p>`;
+}
+// ---------- איך להזמין: רשת אחת, או פיצול לשתיים כשזה חוסך יותר מהמשלוח הנוסף ----------
+const SPLIT_MIN_SAVING = 5;   // מתחת לזה לא שווה את הטרחה של שתי הזמנות
+export function orderPlan(b, fees) {
+  const rows = b.rows.filter(r => CHAINS.some(c => r.cells[c.id]));
+  if (!rows.length) return null;
+  // מוצר שלא נמצא בתוכנית ייקנה בכל זאת במקום אחר: "קנס" = החציון של המחירים שלו
+  const penalty = (r) => { const v = CHAINS.map(c => r.cells[c.id] && r.cells[c.id].total).filter(Boolean).sort((x, y) => x - y); return v[Math.floor(v.length / 2)] || 0; };
+  const fee = (id) => Number.isFinite(fees[id]) ? fees[id] : DEFAULT_FEE;
+  const plans = [];
+  for (const a of CHAINS) for (const c of [null, ...CHAINS]) {
+    if (c && c.id <= a.id) continue;
+    const parts = { [a.id]: [] }; if (c) parts[c.id] = [];
+    let cost = fee(a.id) + (c ? fee(c.id) : 0), missing = [];
+    for (const r of rows) {
+      const opts = [a, c].filter(Boolean).map(ch => ({ ch, x: r.cells[ch.id] })).filter(o => o.x).sort((p, q) => p.x.total - q.x.total);
+      if (opts.length) { parts[opts[0].ch.id].push(r); cost += opts[0].x.total; } else { missing.push(r); cost += penalty(r); }
+    }
+    if (c && (!parts[a.id].length || !parts[c.id].length)) continue;
+    plans.push({ chains: c ? [a, c] : [a], parts, cost, missing });
+  }
+  const singles = plans.filter(p => p.chains.length === 1).sort((x, y) => x.cost - y.cost);
+  const pairs = plans.filter(p => p.chains.length === 2).sort((x, y) => x.cost - y.cost);
+  const single = singles[0];
+  return pairs[0] && pairs[0].cost < single.cost - SPLIT_MIN_SAVING ? { ...pairs[0], saving: single.cost - pairs[0].cost, single } : single;
+}
+const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/' };
+export function claudePrompt(chain, rows, extra = []) {
+  const lines = rows.map((r, k) => { const x = r.cells[chain.id], i = r.item;
+    return `${k + 1}. ${x.name}${x.unit ? ` (${x.unit})` : ''} – כמות ${i.qty || 1}${i.note ? ` – הערה: ${i.note}` : ''}`; });
+  const more = extra.map((i, k) => `${rows.length + k + 1}. ${i.q || i.name} – כמות ${i.qty || 1} (לא נמצא בהשוואה, לחפש בכל זאת)`);
+  return `פתח את האתר של ${chain.name}: ${SITE[chain.id]}
+אני כבר מחובר לחשבון. הוסף לסל הקניות את המוצרים הבאים בכמות שמצוינת.
+אם מוצר לא נמצא בדיוק, בחר את החלופה הכי דומה (אותו סוג, גודל דומה) – וציין אותה בסוף.
+אל תסיים את ההזמנה ואל תשלם. עצור בעמוד הסל ותן לי סיכום: מה נוסף, מה הוחלף ומה לא נמצא.
+
+${[...lines, ...more].join('\n')}`;
+}
+function claudeBox(b, list) {
+  const plan = orderPlan(b, Object.fromEntries(CHAINS.map(c => [c.id, fee(c.id)])));
+  if (!plan) return '';
+  const priced = new Set(b.rows.filter(r => CHAINS.some(c => r.cells[c.id])).map(r => r.item.id));
+  const unpriced = list.filter(i => !priced.has(i.id));
+  const extraFor = (k) => k === 0 ? [...unpriced, ...plan.missing.map(r => r.item)] : [];
+  const boxes = plan.chains.map((ch, k) => {
+    const text = claudePrompt(ch, plan.parts[ch.id], extraFor(k));
+    const sum = plan.parts[ch.id].reduce((s, r) => s + r.cells[ch.id].total, 0);
+    return `<div class="cbox" style="--c:${ch.color}"><div class="cbox-h"><b>${ch.name}</b><span>${plan.parts[ch.id].length} מוצרים · ${money(sum)} + משלוח</span></div>
+      <textarea readonly rows="6" data-prompt="${ch.id}">${esc(text)}</textarea>
+      <div class="row-btns"><button class="btn primary sm" data-copy-prompt="${ch.id}">📋 העתקה</button><a class="btn sm" href="${SITE[ch.id]}" target="_blank" rel="noopener">לאתר ${ch.name} ↗</a></div></div>`;
+  }).join('');
+  const head = plan.chains.length === 2
+    ? `✂️ <b>כדאי לפצל:</b> ${plan.chains.map(c => c.name).join(' + ')} – חיסכון של כ-${money(plan.saving)} גם אחרי שני משלוחים`
+    : `🛒 <b>הזמנה אחת ב${plan.chains[0].name}</b>`;
+  return `<section class="claude"><h2 class="cat">🤖 מילוי הסל עם Claude in Chrome</h2>
+    <p>${head}</p>
+    <p class="note">מעתיקים, פותחים את Claude in Chrome בחלון של אתר הרשת, ומדביקים. Claude ממלא את הסל ועוצר לפני התשלום.</p>${boxes}</section>`;
 }
 // ההמלצה בלי Claude: הזולה בסל המשותף כולל משלוח, ובכמה היא זולה מהבאה אחריה
 function recText(b) {
@@ -768,6 +825,12 @@ document.addEventListener('click', (e) => {
   else if ('clear' in d) { if (confirm('לנקות את כל הרשימה?')) { for (const i of needed()) S.items[i.id] = { ...i, need: false, got: false, qty: 1, at: now() }; save(); render(); } }
   else if ('share' in d) share(shareText());
   else if ('compare' in d) runCompare();
+  else if (d.copyPrompt) {
+    const ta = $(`textarea[data-prompt="${d.copyPrompt}"]`);
+    const done = () => { toast('הועתק – להדביק ב-Claude in Chrome'); t.textContent = '✓ הועתק'; };
+    if (navigator.clipboard) navigator.clipboard.writeText(ta.value).then(done, () => { ta.select(); document.execCommand('copy'); done(); });
+    else { ta.select(); document.execCommand('copy'); done(); }
+  }
   else if ('sharelink' in d) share('הרשימה המשותפת שלנו לקניות 🛒\n' + location.origin + location.pathname);
   else if (d.restore) touch(d.restore, { deleted: false });
   else if ('noimgs' in d) { for (const i of live()) if (i.img) S.items[i.id] = { ...i, img: '', at: now() }; save(); render(); }

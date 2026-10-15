@@ -225,6 +225,24 @@ assert.equal(server.adviceCalls.length, 0, 'Claude analysis is off for now');
 // בלי Claude: ההמלצה לפי הסל המשותף (טופו + שרי, כי בקרפור אין ביצים) + משלוח: רמי 18+30, שופרסל 21+30
 assert.match(await a.locator('.rec').textContent(), /הכי משתלם: רמי לוי[\s\S]*₪48[\s\S]*זול ב-₪3 משופרסל[\s\S]*מוצר אחד לא נמצא/);
 assert.match(await a.locator('.checked').textContent(), /נבדק עכשיו/);
+// תיבת ההוראה ל-Claude in Chrome: רשת אחת (רמי לוי 100 מול חצי חינם 102), עם המוצרים המדויקים
+assert.match(await a.locator('.claude').textContent(), /הזמנה אחת ברמי לוי/);
+const prompt = await a.locator('textarea[data-prompt="rami"]').inputValue();
+assert.match(prompt, /rami-levy\.co\.il[\s\S]*אל תסיים את ההזמנה ואל תשלם[\s\S]*ביצים L rami – כמות 2[\s\S]*טופו rami – כמות 1[\s\S]*במבה – כמות 1 \(לא נמצא בהשוואה/);
+await a.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+await a.locator('[data-copy-prompt="rami"]').click();
+assert.equal(await a.evaluate(() => navigator.clipboard.readText()), prompt);
+// פיצול: רק כשזה חוסך יותר מהמשלוח הנוסף
+const split = await a.evaluate(async () => {
+  const { orderPlan, CHAINS } = await import('./app.js');
+  const cell = (n, total) => ({ name: n, total });
+  const row = (id, sh, ra) => ({ item: { id, name: id, qty: 1 }, cells: { shufersal: sh && cell(id + '-sh', sh), rami: ra && cell(id + '-ra', ra) } });
+  const b = { rows: [row('x', 100, 160), row('y', 160, 100)] };
+  const p1 = orderPlan(b, { shufersal: 30, rami: 30, carrefour: 30, hazi: 30 });
+  const p2 = orderPlan({ rows: [row('x', 100, 104), row('y', 104, 100)] }, { shufersal: 30, rami: 30, carrefour: 30, hazi: 30 });
+  return [p1.chains.map(c => c.id).join('+'), Math.round(p1.saving), p2.chains.length];
+});
+assert.deepEqual(split, ['rami+shufersal', 30, 1]);
 // ביצים ×2: הזול בשורה חצי חינם 50
 const eggs = a.locator('tr', { hasText: 'ביצים' });
 assert.match(await eggs.locator('td.min').textContent(), /₪50/);
