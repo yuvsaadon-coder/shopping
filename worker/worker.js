@@ -17,7 +17,7 @@ export const CHAINS = {
   // החישוק: סופר חברתי מקוון (משלוח לנקודות איסוף). כתובת האתר והפלטפורמה לא אומתו – מנסים כמה אפשרויות נפוצות.
   hachishuk: { name: 'החישוק', search: (q) => HACHISHUK_BASES[0] + '/?s=' + encodeURIComponent(q) + '&post_type=product' }
 };
-export const HACHISHUK_BASES = ['https://hachishuk.co.il', 'https://www.hachishuk.co.il', 'https://hachishuk.org.il'];
+export const HACHISHUK_BASES = ['https://hahishook.com', 'https://www.hahishook.com'];
 const MODEL = 'claude-opus-5-5';
 const UA = { 'user-agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Mobile Safari/537.36', 'accept-language': 'he-IL,he;q=0.9' };
 const MAX_RESULTS = 8;

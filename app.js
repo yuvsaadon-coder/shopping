@@ -29,7 +29,7 @@ export const CHAINS = [
   { id: 'rami', name: 'רמי לוי', color: '#0a58a8', url: 'https://www.rami-levy.co.il/he/online/search?q=' },
   { id: 'carrefour', name: 'קרפור', color: '#1d4f9c', url: 'https://www.carrefour.co.il/search?q=' },
   { id: 'hazi', name: 'חצי חינם', color: '#e07b00', url: 'https://shop.hazi-hinam.co.il/search?q=' },
-  { id: 'hachishuk', name: 'החישוק', color: '#7b3fa0', url: 'https://hachishuk.co.il/?post_type=product&s=' }
+  { id: 'hachishuk', name: 'החישוק', color: '#7b3fa0', url: 'https://hahishook.com/?post_type=product&s=' }
 ];
 const DEFAULT_FEE = 30;   // דמי משלוח משוערים; אפשר לשנות בהגדרות
 
@@ -560,7 +560,7 @@ export function orderPlan(b, fees) {
   const single = singles[0];
   return pairs[0] && pairs[0].cost < single.cost - SPLIT_MIN_SAVING ? { ...pairs[0], saving: single.cost - pairs[0].cost, single } : single;
 }
-const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/', hachishuk: 'https://hachishuk.co.il/' };
+const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/', hachishuk: 'https://hahishook.com/' };
 export function claudePrompt(chain, rows, extra = []) {
   const lines = rows.map((r, k) => { const x = r.cells[chain.id], i = r.item;
     return `${k + 1}. ${x.name}${x.unit ? ` (${x.unit})` : ''} – כמות ${i.qty || 1}${i.note ? ` – הערה: ${i.note}` : ''}`; });

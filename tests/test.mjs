@@ -41,10 +41,10 @@ assert.deepEqual(ld.map(x => [x.name, x.price, x.image, x.url]), [['טופו ק�
 const emb = parseHtmlProducts('<script>window.__D={"items":[{"id":1,"name":"טופו חצי חינם","brand":"x","price":8.9},{"name":"English only","price":3}]}</script>', 'https://shop.hazi-hinam.co.il/search?q=x');
 assert.deepEqual(emb.map(x => [x.name, x.price]), [['טופו חצי חינם', 8.9]]);
 // החישוק: WooCommerce או Shopify
-const woo = parseWooStore([{ name: 'טופו 300 גרם', permalink: 'https://hachishuk.co.il/p/1', prices: { price: '890', regular_price: '990', sale_price: '890', currency_minor_unit: 2 }, images: [{ src: 'https://hachishuk.co.il/t.jpg' }] }], 'https://hachishuk.co.il');
+const woo = parseWooStore([{ name: 'טופו 300 גרם', permalink: 'https://hahishook.com/p/1', prices: { price: '890', regular_price: '990', sale_price: '890', currency_minor_unit: 2 }, images: [{ src: 'https://hahishook.com/t.jpg' }] }], 'https://hahishook.com');
 assert.deepEqual([woo[0].name, woo[0].price, woo[0].promo, woo[0].unitPrice.value], ['טופו 300 גרם', 8.9, 'מבצע (במקום ₪9.9)', 2.97]);
-const shop = parseShopifySuggest({ resources: { results: { products: [{ title: 'טופו', price: '9.50', url: '/products/tofu', image: 'https://cdn.shopify.com/t.jpg' }] } } }, 'https://hachishuk.co.il');
-assert.deepEqual([shop[0].name, shop[0].price, shop[0].url], ['טופו', 9.5, 'https://hachishuk.co.il/products/tofu']);
+const shop = parseShopifySuggest({ resources: { results: { products: [{ title: 'טופו', price: '9.50', url: '/products/tofu', image: 'https://cdn.shopify.com/t.jpg' }] } } }, 'https://hahishook.com');
+assert.deepEqual([shop[0].name, shop[0].price, shop[0].url], ['טופו', 9.5, 'https://hahishook.com/products/tofu']);
 assert.deepEqual(parseShufersal(null), []); assert.deepEqual(parseHtmlProducts('', 'https://x.co.il'), []);
 
 // ---------- מיזוג ----------
@@ -75,7 +75,7 @@ globalThis.fetch = async (u, o = {}) => {
   if (url.hostname === 'www.shufersal.co.il') return Response.json({ results: [{ name: 'טופו', price: { value: 12 }, images: [] }] });
   if (url.hostname === 'www.rami-levy.co.il') { assert.equal(JSON.parse(o.body).q, 'טופו'); return Response.json({ data: [{ name: 'טופו', price: { price: 10 } }] }); }
   if (url.hostname === 'www.carrefour.co.il') return new Response('blocked', { status: 403 });
-  if (url.hostname === 'hachishuk.co.il' && url.pathname.startsWith('/wp-json/')) return Response.json([{ name: 'טופו', permalink: 'https://hachishuk.co.il/p/1', prices: { price: '890', currency_minor_unit: 2 } }]);
+  if (url.hostname === 'hahishook.com' && url.pathname.startsWith('/wp-json/')) return Response.json([{ name: 'טופו', permalink: 'https://hahishook.com/p/1', prices: { price: '890', currency_minor_unit: 2 } }]);
   if (url.hostname === 'api.anthropic.com') {
     aiBody = JSON.parse(o.body);
     assert.equal(o.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
@@ -89,7 +89,7 @@ let r = await (await call('/prices?q=' + encodeURIComponent('טופו'))).json()
 assert.equal(r.chains.shufersal[0].price, 12); assert.equal(r.chains.rami[0].price, 10); assert.equal(r.chains.hachishuk[0].price, 8.9);
 assert.deepEqual(r.chains.carrefour, []); assert.ok(r.errors.carrefour);
 const priceHosts = hosts.length;
-assert.ok(['www.shufersal.co.il', 'www.rami-levy.co.il', 'www.carrefour.co.il', 'shop.hazi-hinam.co.il', 'hachishuk.co.il'].every(h => hosts.includes(h)), 'all five chains searched');
+assert.ok(['www.shufersal.co.il', 'www.rami-levy.co.il', 'www.carrefour.co.il', 'shop.hazi-hinam.co.il', 'hahishook.com'].every(h => hosts.includes(h)), 'all five chains searched');
 r = await (await call('/prices?q=' + encodeURIComponent('טופו'))).json();
 assert.ok(r.cached, 'a second press within minutes comes from KV'); assert.equal(hosts.length, priceHosts);
 await call('/prices?fresh=1&q=' + encodeURIComponent('טופו'));

@@ -26,5 +26,5 @@
 - `/list`, `/compare` – ב-KV `LIBRARY` (משותף עם "מה שנקרא"; מפתחות `shoplist:*`).
 - `/prices` – מפענחים לכל רשת (`parseShufersal`, `parseRami`, `parseHtmlProducts`), `parseSize`/`unitPrice` למחיר ליחידה, `promoText` למבצעים. מטמון 30 דקות, `fresh=1` עוקף.
 - `/advice` – Claude (`claude-opus-5-5`, structured output, `fallbacks: "default"`), עד 40 ביום. בחירה שלא מצביעה על מוצר אמיתי נזרקת.
-- **החישוק** (סופר חברתי מקוון, נקודות איסוף): כתובת האתר לא אומתה. `hachishuk()` מנסה כל כתובת ב-`HACHISHUK_BASES` עם WooCommerce Store API, Shopify suggest, ואז דף חיפוש (JSON-LD). כשהכתובת האמיתית ידועה – לעדכן את `HACHISHUK_BASES` ואת `SITE`/`CHAINS` ב-app.js.
+- **החישוק** (סופר חברתי מקוון, נקודות איסוף, https://hahishook.com): הפלטפורמה של האתר לא אומתה. `hachishuk()` מנסה כל כתובת ב-`HACHISHUK_BASES` עם WooCommerce Store API, Shopify suggest, ואז דף חיפוש (JSON-LD). כשהכתובת האמיתית ידועה – לעדכן את `HACHISHUK_BASES` ואת `SITE`/`CHAINS` ב-app.js.
 - כתובות ה-API של הרשתות לא נבדקו מול האתרים האמיתיים (חסומים בסביבת הענן).
