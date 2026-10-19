@@ -1,6 +1,6 @@
 // Service worker של אפליקציית הקניות: פתיחה גם בלי אינטרנט (בסופר הקליטה לפעמים גרועה)
 // קבצי האפליקציה: קודם מהרשת, ואם אין – מהמטמון. השרת (מחירים, סנכרון) ותמונות החנויות לא נשמרים כאן.
-const CACHE = 'shopping-v10';
+const CACHE = 'shopping-v11';
 const SHELL = ['./', './index.html', './app.js', './products.js', './manifest.webmanifest', './icon.svg', './icon-192.png'];
 
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
