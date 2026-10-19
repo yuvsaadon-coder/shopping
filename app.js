@@ -567,7 +567,7 @@ export function orderPlan(b, fees) {
 }
 const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/', hachishuk: 'https://hahishook.com/' };
 // taste: ההעדפות שכבר נלמדו מההזמנות הקודמות ברשת הזו. בלעדיהן (פעם ראשונה) – Claude סוקר את ההיסטוריה ומחזיר סיכום לשמירה.
-export function claudePrompt(chain, rows, extra = [], taste = '') {
+export function claudePrompt(chain, rows, extra = [], taste = '', address = '') {
   const lines = rows.map((r, k) => { const x = r.cells[chain.id], i = r.item;
     return `${k + 1}. ${x.name}${x.unit ? ` (${x.unit})` : ''} – כמות ${i.qty || 1}${i.note ? ` – הערה: ${i.note}` : ''}`; });
   const more = extra.map((i, k) => `${rows.length + k + 1}. ${i.q || i.name} – כמות ${i.qty || 1} (לא נמצא בהשוואה, לחפש בכל זאת)`);
@@ -578,7 +578,8 @@ export function claudePrompt(chain, rows, extra = [], taste = '') {
 בסיכום שבסוף, הוסף שורה אחת שמתחילה ב"העדפות:" – מוצר: מותג/גודל, מופרד בפסיקים – כדי שאשמור ולא תצטרך לבדוק שוב.`;
   return `משימה: למלא את סל הקניות שלי באתר ${chain.name} – בפועל, באתר עצמו.
 
-1. עבור לאתר ${SITE[chain.id]} (בלשונית הזו). אני כבר מחובר לחשבון.
+1. עבור לאתר ${SITE[chain.id]} (בלשונית הזו). אני כבר מחובר לחשבון.${address ? `
+   כתובת המשלוח: ${address}. ${chain.id === 'hachishuk' ? 'בחר את נקודת האיסוף הקרובה ביותר לכתובת הזו.' : 'ודא שזו הכתובת שמוגדרת למשלוח באתר (אם לא – עדכן אותה).'}` : ''}
 2. ${history.replace(/\n/g, '\n   ')}
 3. לכל מוצר ברשימה למטה, לפי הסדר:
    א. הקלד את שם המוצר בתיבת החיפוש של האתר.
@@ -587,11 +588,13 @@ export function claudePrompt(chain, rows, extra = [], taste = '') {
    ד. אם יש מבצע על המוצר או על חלופה שווה (1+1, מותג אחר שאנחנו קונים) – העדף אותו.
    ה. אם אין התאמה מדויקת – בחר את החלופה הכי דומה (אותו סוג, גודל דומה). אם באמת לא ברור מה לבחור – דלג, ותשאל אותי על כל הספקות יחד בסוף.
 4. בסוף פתח את עמוד הסל. אל תמשיך לתשלום ואל תשלים את ההזמנה.
-5. תן לי סיכום: מה נוסף, מה הוחלף, אילו מבצעים נוצלו, מה לא נמצא – ואת השאלות על מה שדילגת.
+5. תן לי סיכום: מה נוסף, מה הוחלף, אילו מבצעים נוצלו, מה לא נמצא${address ? ', לאיזו כתובת המשלוח' : ''} – ואת השאלות על מה שדילגת.
 
 הרשימה:
 ${[...lines, ...more].join('\n')}`;
 }
+// כתובת המשלוח: נשמרת ברשימה המשותפת (לא בקוד – המאגר ציבורי)
+const addressOf = () => (S.meta.address && S.meta.address.text) || '';
 const tasteOf = (chainId) => (S.prefs['taste|' + chainId] && S.prefs['taste|' + chainId].text) || '';
 function claudeBox(b, list, plan) {
   if (!plan) return '';
@@ -600,7 +603,7 @@ function claudeBox(b, list, plan) {
   const extraFor = (k) => k === 0 ? [...unpriced, ...plan.missing.map(r => r.item)] : [];
   const boxes = plan.chains.map((ch, k) => {
     const taste = tasteOf(ch.id);
-    const text = claudePrompt(ch, plan.parts[ch.id], extraFor(k), taste);
+    const text = claudePrompt(ch, plan.parts[ch.id], extraFor(k), taste, addressOf());
     const sum = plan.parts[ch.id].reduce((s, r) => s + r.cells[ch.id].total, 0);
     return `<div class="cbox" style="--c:${ch.color}"><div class="cbox-h"><b>${ch.name}</b><span>${plan.parts[ch.id].length} מוצרים · ${money(sum)} + משלוח</span></div>
       <textarea readonly rows="6" data-prompt="${ch.id}">${esc(text)}</textarea>
@@ -615,7 +618,8 @@ function claudeBox(b, list, plan) {
     : `🛒 <b>הזמנה אחת ב${plan.chains[0].name}</b>`;
   return `<section class="claude"><h2 class="cat">🤖 מילוי הסל עם Claude in Chrome</h2>
     <p>${head}</p>
-    <p class="note">מעתיקים, פותחים את Claude in Chrome בחלון של אתר הרשת, ומדביקים. Claude ממלא את הסל ועוצר לפני התשלום.</p>${boxes}</section>`;
+    <p class="note">מעתיקים, פותחים את Claude in Chrome בחלון של אתר הרשת, ומדביקים. Claude ממלא את הסל ועוצר לפני התשלום.</p>
+    ${addressOf() ? `<p class="note">🏠 משלוח ל: ${esc(addressOf())}</p>` : `<p class="note">🏠 כדאי להוסיף כתובת למשלוח בהגדרות, כדי ש-Claude יוודא אותה.</p>`}${boxes}</section>`;
 }
 // ההמלצה בלי Claude: הזולה בסל המשותף כולל משלוח, ובכמה היא זולה מהבאה אחריה
 // הסבר להמלצה: כמה יעלה (מוצרים + משלוח), בכמה זה זול מהאפשרות הבאה, מה חסר ומה במבצע
@@ -745,6 +749,8 @@ function settingsView() {
     <div class="card"><h3>🙋 מי משתמש בטלפון הזה?</h3>
       <label class="field inline">השם שלי<span class="row"><input id="me" value="${esc(me())}" placeholder="למשל: יעל" autocomplete="off"></span></label>
       <p class="note">השם מופיע ליד מוצרים שהוספת, וכשאת/ה בקניות.</p></div>
+    <div class="card"><h3>🏠 כתובת למשלוח</h3>
+      <label class="field">הכתובת (נכנסת להוראה ל-Claude, ומשותפת לכל הבית)<input id="addr" value="${esc(addressOf())}" placeholder="רחוב, מספר, כניסה, דירה, עיר" autocomplete="street-address"></label></div>
     <div class="card"><h3>📲 התקנה בטלפון</h3>${install}
       <p>כדי שעוד מכשיר יראה את אותה רשימה, פשוט פותחים בו את הכתובת הזו:</p>
       <div class="code">${esc(location.origin + location.pathname)}</div>
@@ -881,6 +887,7 @@ document.addEventListener('change', (e) => {
   if (t.matches('[data-scan-free]') && t.files.length) { runScan([...t.files], { mode: 'free', expect: [] }); t.value = ''; return; }
   if (t.dataset.pref) { S.prefs[t.dataset.pref] = { name: t.value, at: now() }; save(); render(); }
   else if (t.dataset.fee) { const n = Number(t.value); S.fees[t.dataset.fee] = { value: Number.isFinite(n) && n >= 0 ? n : DEFAULT_FEE, at: now() }; save(); }
+  else if (t.id === 'addr') { S.meta.address = { text: t.value.trim().slice(0, 200), at: now() }; save(); toast('הכתובת נשמרה'); }
   else if (t.id === 'me') { store.set('shop-me', t.value.trim()); toast('נשמר'); }
 });
 document.addEventListener('keydown', (e) => {
@@ -902,6 +909,9 @@ setInterval(() => {
 
 lastRemindRender = pendingOrders().filter(o => now() >= remindAt(o)).length;
 render();
+// קישור חד-פעמי להגדרת כתובת המשלוח (?addr=...), כדי שהכתובת לא תישב בקוד הציבורי
+{ const ad = new URLSearchParams(location.search).get('addr');
+  if (ad) { S.meta.address = { text: ad.trim().slice(0, 200), at: now() }; save(); history.replaceState(null, '', location.pathname); toast('כתובת המשלוח נשמרה'); } }
 sync().then(() => {
   // קישור מהתזכורת ביומן: ?verify=<משלוח>
   const v = new URLSearchParams(location.search).get('verify');

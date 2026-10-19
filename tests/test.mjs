@@ -237,6 +237,13 @@ assert.match(await a.locator('.claude').textContent(), /הזמנה אחת ברמ
 const prompt = await a.locator('textarea[data-prompt="rami"]').inputValue();
 assert.match(prompt, /rami-levy\.co\.il[\s\S]*אל תמשיך לתשלום ואל תשלים את ההזמנה[\s\S]*ביצים L rami – כמות 2[\s\S]*טופו rami – כמות 1[\s\S]*במבה – כמות 1 \(לא נמצא בהשוואה/);
 assert.match(prompt, /עבור על ההזמנות הקודמות שלנו[\s\S]*העדפות:[\s\S]*"הוספה לסל"[\s\S]*בלי לחכות לאישור שלי[\s\S]*מבצע[\s\S]*תשאל אותי על כל הספקות יחד בסוף/);
+// כתובת המשלוח מההגדרות נכנסת להוראה
+assert.doesNotMatch(prompt, /כתובת המשלוח/);
+await a.getByRole('button', { name: /הגדרות/ }).click();
+await a.locator('#addr').fill('רחוב הבדיקה 1, דירה 2, ירושלים');
+await a.locator('#addr').dispatchEvent('change');
+await a.getByRole('button', { name: /איפה זול/ }).click();
+assert.match(await a.locator('textarea[data-prompt="rami"]').inputValue(), /כתובת המשלוח: רחוב הבדיקה 1, דירה 2, ירושלים\. ודא שזו הכתובת/);
 // ההעדפות שנלמדו נשמרות לרשת הזו, ובפעם הבאה בלי לסקור שוב
 await a.locator('.taste summary').first().click();
 await a.locator('textarea[data-taste-input="rami"]').fill('העדפות: טופו – טופו טבעי 300 גרם, ביצים – L 12');
