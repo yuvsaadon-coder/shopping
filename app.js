@@ -302,7 +302,8 @@ function stopShop(keepCart = true) {
 function startDelivery() {
   const list = needed();
   if (!list.length) { toast('הרשימה ריקה'); return; }
-  const best = S.compare && S.compare.prices ? basket(superNeeded(), S.compare, S.prefs, {}).best : null;
+  const plan0 = S.compare && S.compare.prices ? orderPlan(basket(superNeeded(), S.compare, S.prefs, {}), Object.fromEntries(CHAINS.map(c => [c.id, fee(c.id)]))) : null;
+  const best = plan0 ? { chain: plan0.chains[0] } : null;
   const t = new Date(now() + DAY); t.setHours(10, 0, 0, 0);
   const form = sheet(`<h3>🚚 הזמנתי משלוח</h3>
     <label class="field">מאיפה<select name="chain">${CHAINS.map(c => `<option value="${c.id}"${best && best.chain.id === c.id ? ' selected' : ''}>${c.name}</option>`).join('')}<option value="other">אחר</option></select></label>
@@ -504,17 +505,21 @@ function compareView() {
   const unchecked = list.filter(i => !C.prices[i.id]);
   const stale = unchecked.length || list.some(i => C.qty && C.qty[i.id] && C.qty[i.id] !== (i.qty || 1));
   const A = C.advice;
-  const bestChain = A && A.best_chain ? chainOf(A.best_chain) : b.best && b.best.chain;
+  // מקור אחד להמלצה: אותה תוכנית קובעת את הכותרת, את התגית "מומלץ" ואת התיבה ל-Claude in Chrome
+  const plan = orderPlan(b, Object.fromEntries(CHAINS.map(c => [c.id, fee(c.id)])));
+  const planIds = plan ? plan.chains.map(c => c.id) : [];
+  const bestChain = A && A.best_chain ? chainOf(A.best_chain) : plan && plan.chains[0];
+  const isBest = (id) => A && A.best_chain ? id === A.best_chain : planIds.includes(id);
   const adviceCard = A ? `<div class="rec">
       <div class="rec-h">🏆 כדאי להזמין ב<b>${esc(bestChain ? bestChain.name : '')}</b></div>
       <p>${esc(A.summary)}</p>
       ${A.split ? `<p class="split">✂️ ${esc(A.split)}</p>` : ''}
       ${A.tips && A.tips.length ? `<ul class="tips">${A.tips.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
-    </div>` : b.best ? `<div class="rec"><div class="rec-h">🏆 הכי משתלם: <b>${b.best.chain.name}</b></div>
-      <p>${recText(b)}</p></div>` : '';
+    </div>` : plan ? `<div class="rec"><div class="rec-h">${plan.chains.length === 2 ? `✂️ הכי משתלם: לפצל בין <b>${plan.chains.map(c => c.name).join(' + ')}</b>` : `🏆 הכי משתלם: <b>${plan.chains[0].name}</b>`}</div>
+      <p>${recText(b, plan)}</p></div>` : '';
   const cards = b.totals.map(t => `
-    <div class="chain${bestChain && t.chain.id === bestChain.id ? ' best' : ''}" style="--c:${t.chain.color}">
-      <div class="chain-h"><b>${t.chain.name}</b>${bestChain && t.chain.id === bestChain.id ? '<span class="tag">מומלץ</span>' : ''}</div>
+    <div class="chain${isBest(t.chain.id) ? ' best' : ''}" style="--c:${t.chain.color}">
+      <div class="chain-h"><b>${t.chain.name}</b>${isBest(t.chain.id) ? '<span class="tag">מומלץ</span>' : ''}</div>
       <div class="sum">${money(t.common + t.fee)}</div>
       <div class="sub">סל משותף (${b.commonCount} מוצרים) ${money(t.common)} + משלוח ${money(t.fee)}</div>
       <div class="sub">נמצאו ${t.found} מתוך ${b.rows.length} · כל מה שנמצא: ${money(t.sum)}</div>
@@ -531,7 +536,7 @@ function compareView() {
         ${res.length > 1 ? `<select data-pref="${r.item.id}|${c.id}" aria-label="מוצר אחר ב${c.name}">${res.map(o => `<option value="${esc(o.name)}"${o.name === x.name ? ' selected' : ''}>${esc(o.name)} – ${money(o.price)}</option>`).join('')}</select>` : `<div class="pn">${esc(x.name)}</div>`}
         <a class="pn" href="${esc(x.url || searchUrl(c, r.item))}" target="_blank" rel="noopener">לאתר ↗</a></td>`;
     }).join('')}</tr>`).join('')}</tbody></table></div>`;
-  return head + `<p class="checked">נבדק ${ago(C.at)}${stale ? ' · <b>הרשימה השתנתה מאז</b>' : ''}</p>` + btn + adviceCard + claudeBox(b, list) + `<div class="chains">${cards}</div>` +
+  return head + `<p class="checked">נבדק ${ago(C.at)}${stale ? ' · <b>הרשימה השתנתה מאז</b>' : ''}</p>` + btn + adviceCard + claudeBox(b, list, plan) + `<div class="chains">${cards}</div>` +
     (unchecked.length ? `<p class="note">${unchecked.length === 1 ? 'מוצר אחד נוסף' : unchecked.length + ' מוצרים נוספו'} אחרי החיפוש: ${unchecked.map(i => esc(i.name)).join(', ')}</p>` : '') + table +
     `<p class="note">המחירים והמבצעים מאתרי הרשתות בזמן החיפוש. מבצעי מועדון ודמי משלוח מדויקים מופיעים רק בקופה; דמי המשלוח המשוערים נקבעים בהגדרות. אפשר לבחור מוצר אחר בכל תא.</p>`;
 }
@@ -558,32 +563,46 @@ export function orderPlan(b, fees) {
   const singles = plans.filter(p => p.chains.length === 1).sort((x, y) => x.cost - y.cost);
   const pairs = plans.filter(p => p.chains.length === 2).sort((x, y) => x.cost - y.cost);
   const single = singles[0];
-  return pairs[0] && pairs[0].cost < single.cost - SPLIT_MIN_SAVING ? { ...pairs[0], saving: single.cost - pairs[0].cost, single } : single;
+  return pairs[0] && pairs[0].cost < single.cost - SPLIT_MIN_SAVING ? { ...pairs[0], saving: single.cost - pairs[0].cost, single, singles } : { ...single, singles };
 }
 const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/', hachishuk: 'https://hahishook.com/' };
-export function claudePrompt(chain, rows, extra = []) {
+// taste: ההעדפות שכבר נלמדו מההזמנות הקודמות ברשת הזו. בלעדיהן (פעם ראשונה) – Claude סוקר את ההיסטוריה ומחזיר סיכום לשמירה.
+export function claudePrompt(chain, rows, extra = [], taste = '') {
   const lines = rows.map((r, k) => { const x = r.cells[chain.id], i = r.item;
     return `${k + 1}. ${x.name}${x.unit ? ` (${x.unit})` : ''} – כמות ${i.qty || 1}${i.note ? ` – הערה: ${i.note}` : ''}`; });
   const more = extra.map((i, k) => `${rows.length + k + 1}. ${i.q || i.name} – כמות ${i.qty || 1} (לא נמצא בהשוואה, לחפש בכל זאת)`);
+  const history = taste
+    ? `ההעדפות שלנו (מההזמנות הקודמות שלנו): ${taste}
+העדף את המותגים והגדלים האלה כשהם מתאימים. אין צורך לעבור שוב על ההזמנות הקודמות.`
+    : `לפני שמתחילים: עבור על ההזמנות הקודמות שלנו באתר (באזור האישי) כדי להבין אילו מותגים וגדלים אנחנו קונים, והעדף אותם.
+בסוף, כתוב בנפרד שורה אחת שמתחילה ב"העדפות:" עם סיכום קצר – מוצר: מותג/גודל, מופרד בפסיקים – כדי שאשמור ולא תצטרך לבדוק שוב.`;
   return `פתח את האתר של ${chain.name}: ${SITE[chain.id]}
 אני כבר מחובר לחשבון. הוסף לסל הקניות את המוצרים הבאים בכמות שמצוינת.
+${history}
+חפש גם מבצעים באתר: אם יש מבצע על מוצר מהרשימה או על חלופה שווה (למשל 1+1, או מותג אחר שאנחנו קונים), העדף אותו וציין את זה.
 אם מוצר לא נמצא בדיוק, בחר את החלופה הכי דומה (אותו סוג, גודל דומה) – וציין אותה בסוף.
-אל תסיים את ההזמנה ואל תשלם. עצור בעמוד הסל ותן לי סיכום: מה נוסף, מה הוחלף ומה לא נמצא.
+אם אתה מתלבט בין אפשרויות – תשאל אותי לפני שאתה מוסיף.
+אל תסיים את ההזמנה ואל תשלם. עצור בעמוד הסל ותן לי סיכום: מה נוסף, מה הוחלף, אילו מבצעים נוצלו ומה לא נמצא.
 
 ${[...lines, ...more].join('\n')}`;
 }
-function claudeBox(b, list) {
-  const plan = orderPlan(b, Object.fromEntries(CHAINS.map(c => [c.id, fee(c.id)])));
+const tasteOf = (chainId) => (S.prefs['taste|' + chainId] && S.prefs['taste|' + chainId].text) || '';
+function claudeBox(b, list, plan) {
   if (!plan) return '';
   const priced = new Set(b.rows.filter(r => CHAINS.some(c => r.cells[c.id])).map(r => r.item.id));
   const unpriced = list.filter(i => !priced.has(i.id));
   const extraFor = (k) => k === 0 ? [...unpriced, ...plan.missing.map(r => r.item)] : [];
   const boxes = plan.chains.map((ch, k) => {
-    const text = claudePrompt(ch, plan.parts[ch.id], extraFor(k));
+    const taste = tasteOf(ch.id);
+    const text = claudePrompt(ch, plan.parts[ch.id], extraFor(k), taste);
     const sum = plan.parts[ch.id].reduce((s, r) => s + r.cells[ch.id].total, 0);
     return `<div class="cbox" style="--c:${ch.color}"><div class="cbox-h"><b>${ch.name}</b><span>${plan.parts[ch.id].length} מוצרים · ${money(sum)} + משלוח</span></div>
       <textarea readonly rows="6" data-prompt="${ch.id}">${esc(text)}</textarea>
-      <div class="row-btns"><button class="btn primary sm" data-copy-prompt="${ch.id}">📋 העתקה</button><a class="btn sm" href="${SITE[ch.id]}" target="_blank" rel="noopener">לאתר ${ch.name} ↗</a></div></div>`;
+      <div class="row-btns"><button class="btn primary sm" data-copy-prompt="${ch.id}">📋 העתקה</button><a class="btn sm" href="${SITE[ch.id]}" target="_blank" rel="noopener">לאתר ${ch.name} ↗</a></div>
+      ${taste ? `<p class="note taste">⭐ ההעדפות שלכם ב${ch.name} נשמרו, ולא צריך לסקור שוב את ההזמנות. <button class="linkish" data-taste-reset="${ch.id}">לסקור מחדש</button></p>`
+        : `<details class="taste"><summary>⭐ בפעם הראשונה Claude יעבור על ההזמנות הקודמות ב${ch.name}. כשיסיים – להדביק כאן את שורת ה"העדפות" שלו</summary>
+          <textarea rows="3" data-taste-input="${ch.id}" placeholder="העדפות: טופו – טופו טבעי 300 גרם, חלב – תנובה 3% קרטון…"></textarea>
+          <button class="btn sm" data-taste-save="${ch.id}">שמירה</button></details>`}</div>`;
   }).join('');
   const head = plan.chains.length === 2
     ? `✂️ <b>כדאי לפצל:</b> ${plan.chains.map(c => c.name).join(' + ')} – חיסכון של כ-${money(plan.saving)} גם אחרי שני משלוחים`
@@ -593,14 +612,17 @@ function claudeBox(b, list) {
     <p class="note">מעתיקים, פותחים את Claude in Chrome בחלון של אתר הרשת, ומדביקים. Claude ממלא את הסל ועוצר לפני התשלום.</p>${boxes}</section>`;
 }
 // ההמלצה בלי Claude: הזולה בסל המשותף כולל משלוח, ובכמה היא זולה מהבאה אחריה
-function recText(b) {
-  const best = b.best, rest = b.totals.filter(t => t !== best);
-  const next = rest[0];
-  const parts = [`סל משותף של ${b.commonCount} מוצרים + משלוח: ${money(best.common + best.fee)}`];
-  if (next) { const d = (next.common + next.fee) - (best.common + best.fee); if (d >= 1) parts.push(`זול ב-${money(d)} מ${next.chain.name}`); }
-  const miss = b.rows.length - best.found;
-  if (miss) parts.push(miss === 1 ? 'מוצר אחד לא נמצא שם' : `${miss} מוצרים לא נמצאו שם`);
-  const promos = b.rows.filter(r => r.cells[best.chain.id] && r.cells[best.chain.id].promo).length;
+// הסבר להמלצה: כמה יעלה (מוצרים + משלוח), בכמה זה זול מהאפשרות הבאה, מה חסר ומה במבצע
+function recText(b, plan) {
+  const parts = [];
+  const sum = plan.chains.reduce((t, ch) => t + plan.parts[ch.id].reduce((x, r) => x + r.cells[ch.id].total, 0) + fee(ch.id), 0);
+  parts.push(`בערך ${money(sum)} כולל ${plan.chains.length === 2 ? 'שני משלוחים' : 'משלוח'}`);
+  const next = plan.chains.length === 2 ? plan.singles[0] : plan.singles[1];
+  if (next) { const d = next.cost - plan.cost; if (d >= 1) parts.push(`זול ב-${money(d)} מ${next.chains[0].name}`); }
+  if (plan.missing.length) parts.push(plan.missing.length === 1 ? 'מוצר אחד לא נמצא שם' : `${plan.missing.length} מוצרים לא נמצאו שם`);
+  const none = b.rows.filter(r => !CHAINS.some(c => r.cells[c.id])).length;
+  if (none) parts.push(none === 1 ? 'מוצר אחד לא נמצא באף רשת' : `${none} מוצרים לא נמצאו באף רשת`);
+  const promos = plan.chains.reduce((t, ch) => t + plan.parts[ch.id].filter(r => r.cells[ch.id].promo).length, 0);
   if (promos) parts.push(promos === 1 ? 'מוצר אחד במבצע' : `${promos} מוצרים במבצע`);
   return esc(parts.join(' · ')) + '.';
 }
@@ -826,6 +848,12 @@ document.addEventListener('click', (e) => {
   else if ('clear' in d) { if (confirm('לנקות את כל הרשימה?')) { for (const i of needed()) S.items[i.id] = { ...i, need: false, got: false, qty: 1, at: now() }; save(); render(); } }
   else if ('share' in d) share(shareText());
   else if ('compare' in d) runCompare();
+  else if (d.tasteSave) {
+    const v = $(`textarea[data-taste-input="${d.tasteSave}"]`).value.replace(/^\s*העדפות\s*:\s*/, '').trim();
+    if (!v) { toast('צריך להדביק את שורת ההעדפות'); return; }
+    S.prefs['taste|' + d.tasteSave] = { text: v.slice(0, 1500), at: now() }; save(); render(); toast('נשמר – בפעם הבאה בלי לסקור שוב');
+  }
+  else if (d.tasteReset) { S.prefs['taste|' + d.tasteReset] = { text: '', at: now() }; save(); render(); }
   else if (d.copyPrompt) {
     const ta = $(`textarea[data-prompt="${d.copyPrompt}"]`);
     const done = () => { toast('הועתק – להדביק ב-Claude in Chrome'); t.textContent = '✓ הועתק'; };

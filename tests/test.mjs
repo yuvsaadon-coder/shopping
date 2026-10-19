@@ -230,15 +230,23 @@ await a.locator('.rec').waitFor();
 assert.equal(server.priceCalls.length, 4); assert.ok(server.priceCalls.every(q => q.endsWith('!')), 'always fresh prices');
 assert.equal(server.adviceCalls.length, 0, 'Claude analysis is off for now');
 // בלי Claude: ההמלצה לפי הסל המשותף (טופו + שרי, כי בקרפור אין ביצים) + משלוח: רמי 18+30, שופרסל 21+30
-assert.match(await a.locator('.rec').textContent(), /הכי משתלם: רמי לוי[\s\S]*₪48[\s\S]*זול ב-₪3 משופרסל[\s\S]*מוצר אחד לא נמצא/);
+assert.match(await a.locator('.rec').textContent(), /הכי משתלם: רמי לוי[\s\S]*בערך ₪100 כולל משלוח · זול ב-₪2 מחצי חינם · מוצר אחד לא נמצא באף רשת/);
 assert.match(await a.locator('.checked').textContent(), /נבדק עכשיו/);
 // תיבת ההוראה ל-Claude in Chrome: רשת אחת (רמי לוי 100 מול חצי חינם 102), עם המוצרים המדויקים
 assert.match(await a.locator('.claude').textContent(), /הזמנה אחת ברמי לוי/);
 const prompt = await a.locator('textarea[data-prompt="rami"]').inputValue();
 assert.match(prompt, /rami-levy\.co\.il[\s\S]*אל תסיים את ההזמנה ואל תשלם[\s\S]*ביצים L rami – כמות 2[\s\S]*טופו rami – כמות 1[\s\S]*במבה – כמות 1 \(לא נמצא בהשוואה/);
+assert.match(prompt, /עבור על ההזמנות הקודמות שלנו[\s\S]*העדפות:[\s\S]*חפש גם מבצעים[\s\S]*אם אתה מתלבט בין אפשרויות – תשאל אותי/);
+// ההעדפות שנלמדו נשמרות לרשת הזו, ובפעם הבאה בלי לסקור שוב
+await a.locator('.taste summary').first().click();
+await a.locator('textarea[data-taste-input="rami"]').fill('העדפות: טופו – טופו טבעי 300 גרם, ביצים – L 12');
+await a.locator('[data-taste-save="rami"]').click();
+const prompt2 = await a.locator('textarea[data-prompt="rami"]').inputValue();
+assert.match(prompt2, /ההעדפות שלנו \(מההזמנות הקודמות שלנו\): טופו – טופו טבעי 300 גרם, ביצים – L 12/);
+assert.doesNotMatch(prompt2, /עבור על ההזמנות הקודמות/);
 await a.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 await a.locator('[data-copy-prompt="rami"]').click();
-assert.equal(await a.evaluate(() => navigator.clipboard.readText()), prompt);
+assert.equal(await a.evaluate(() => navigator.clipboard.readText()), prompt2);
 // פיצול: רק כשזה חוסך יותר מהמשלוח הנוסף
 const split = await a.evaluate(async () => {
   const { orderPlan, CHAINS } = await import('./app.js');
@@ -264,6 +272,10 @@ if (process.env.SHOTS) await a.screenshot({ path: `${process.env.SHOTS}/prices.p
 await a.locator('select[data-pref="tofu|shufersal"]').selectOption('משהו אחר');
 assert.match(await a.locator('tr', { hasText: 'טופו' }).locator('td').first().textContent(), /₪1/);
 assert.match(await a.locator('.rec').textContent(), /הכי משתלם: שופרסל/, 'manual ₪1 tofu makes Shufersal cheapest');
+// ההמלצה, התגית "מומלץ" והתיבה ל-Claude תמיד על אותה רשת
+assert.match(await a.locator('.claude').textContent(), /הזמנה אחת בשופרסל/);
+assert.equal(await a.locator('textarea[data-prompt]').count(), 1); assert.ok(await a.locator('textarea[data-prompt="shufersal"]').count());
+assert.match(await a.locator('.chain.best').textContent(), /שופרסל/);
 // המכשיר השני מקבל את ההשוואה בלי לחפש שוב
 await b.getByRole('button', { name: /איפה זול/ }).click();
 await b.locator('.rec').waitFor({ timeout: 15000 });
