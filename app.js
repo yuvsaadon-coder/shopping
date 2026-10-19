@@ -1,6 +1,6 @@
 // קניות בבית: מה חסר, רשימה אחת לכל הבית (מסתנכרנת בין המכשירים), מצב קניות עם אישור בקופה,
 // משלוחים עם תזכורת לבדיקה, "כנראה נגמר" לפי הקצב שבו קונים כל מוצר,
-// ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור וחצי חינם, והמלצה איפה כדאי להזמין.
+// ובלחיצה – חיפוש מחירים ומבצעים עדכניים בשופרסל, רמי לוי, קרפור, חצי חינם והחישוק, והמלצה איפה כדאי להזמין.
 import { CATS, PRODUCTS, EMOJI_HINTS, STORES, storeOf, SEEN } from './products.js';
 
 // השרת ב-Cloudflare: shopping123 (או kniyot / shopping אם אחד מהם הוא הפעיל). נבחר לפי מי שעונה ל-/ping.
@@ -28,7 +28,8 @@ export const CHAINS = [
   { id: 'shufersal', name: 'שופרסל', color: '#d8232a', url: 'https://www.shufersal.co.il/online/he/search?text=' },
   { id: 'rami', name: 'רמי לוי', color: '#0a58a8', url: 'https://www.rami-levy.co.il/he/online/search?q=' },
   { id: 'carrefour', name: 'קרפור', color: '#1d4f9c', url: 'https://www.carrefour.co.il/search?q=' },
-  { id: 'hazi', name: 'חצי חינם', color: '#e07b00', url: 'https://shop.hazi-hinam.co.il/search?q=' }
+  { id: 'hazi', name: 'חצי חינם', color: '#e07b00', url: 'https://shop.hazi-hinam.co.il/search?q=' },
+  { id: 'hachishuk', name: 'החישוק', color: '#7b3fa0', url: 'https://hachishuk.co.il/?post_type=product&s=' }
 ];
 const DEFAULT_FEE = 30;   // דמי משלוח משוערים; אפשר לשנות בהגדרות
 
@@ -491,7 +492,7 @@ async function runCompare() {
 
 function compareView() {
   const list = superNeeded();
-  const head = `<section class="hero"><h1>איפה כדאי להזמין?</h1><p>שופרסל · רמי לוי · קרפור · חצי חינם · משלוח לירושלים</p></section>`;
+  const head = `<section class="hero"><h1>איפה כדאי להזמין?</h1><p>שופרסל · רמי לוי · קרפור · חצי חינם · החישוק</p></section>`;
   if (comparing) return head + (comparing.stage === 'prices'
     ? `<div class="wait"><b>מחפש מחירים ומבצעים עדכניים…</b><div class="progress"><progress id="progress" max="${comparing.total}" value="${comparing.done}"></progress><span id="progress-t">${comparing.done}/${comparing.total}</span></div></div>`
     : `<div class="wait"><b>Claude משווה בין המוצרים והמבצעים…</b><div class="dots"><i></i><i></i><i></i></div></div>`);
@@ -559,7 +560,7 @@ export function orderPlan(b, fees) {
   const single = singles[0];
   return pairs[0] && pairs[0].cost < single.cost - SPLIT_MIN_SAVING ? { ...pairs[0], saving: single.cost - pairs[0].cost, single } : single;
 }
-const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/' };
+const SITE = { shufersal: 'https://www.shufersal.co.il/online/he/', rami: 'https://www.rami-levy.co.il/he/online', carrefour: 'https://www.carrefour.co.il/', hazi: 'https://shop.hazi-hinam.co.il/', hachishuk: 'https://hachishuk.co.il/' };
 export function claudePrompt(chain, rows, extra = []) {
   const lines = rows.map((r, k) => { const x = r.cells[chain.id], i = r.item;
     return `${k + 1}. ${x.name}${x.unit ? ` (${x.unit})` : ''} – כמות ${i.qty || 1}${i.note ? ` – הערה: ${i.note}` : ''}`; });

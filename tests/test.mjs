@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { chromium } from 'playwright';
-import { parseShufersal, parseRami, parseHtmlProducts, parseSize, unitPrice, promoText, mergeShop, handle, advicePrompt } from '../worker/worker.js';
+import { parseWooStore, parseShopifySuggest, parseShufersal, parseRami, parseHtmlProducts, parseSize, unitPrice, promoText, mergeShop, handle, advicePrompt } from '../worker/worker.js';
 import { PRODUCTS } from '../products.js';
 
 // ---------- רשימת הפתיחה ----------
@@ -40,6 +40,11 @@ const ld = parseHtmlProducts('<script type="application/ld+json">{"@graph":[{"@t
 assert.deepEqual(ld.map(x => [x.name, x.price, x.image, x.url]), [['טופו קרפור', 10.5, 'https://www.carrefour.co.il/i.jpg', 'https://www.carrefour.co.il/p/2']]);
 const emb = parseHtmlProducts('<script>window.__D={"items":[{"id":1,"name":"טופו חצי חינם","brand":"x","price":8.9},{"name":"English only","price":3}]}</script>', 'https://shop.hazi-hinam.co.il/search?q=x');
 assert.deepEqual(emb.map(x => [x.name, x.price]), [['טופו חצי חינם', 8.9]]);
+// החישוק: WooCommerce או Shopify
+const woo = parseWooStore([{ name: 'טופו 300 גרם', permalink: 'https://hachishuk.co.il/p/1', prices: { price: '890', regular_price: '990', sale_price: '890', currency_minor_unit: 2 }, images: [{ src: 'https://hachishuk.co.il/t.jpg' }] }], 'https://hachishuk.co.il');
+assert.deepEqual([woo[0].name, woo[0].price, woo[0].promo, woo[0].unitPrice.value], ['טופו 300 גרם', 8.9, 'מבצע (במקום ₪9.9)', 2.97]);
+const shop = parseShopifySuggest({ resources: { results: { products: [{ title: 'טופו', price: '9.50', url: '/products/tofu', image: 'https://cdn.shopify.com/t.jpg' }] } } }, 'https://hachishuk.co.il');
+assert.deepEqual([shop[0].name, shop[0].price, shop[0].url], ['טופו', 9.5, 'https://hachishuk.co.il/products/tofu']);
 assert.deepEqual(parseShufersal(null), []); assert.deepEqual(parseHtmlProducts('', 'https://x.co.il'), []);
 
 // ---------- מיזוג ----------
@@ -70,6 +75,7 @@ globalThis.fetch = async (u, o = {}) => {
   if (url.hostname === 'www.shufersal.co.il') return Response.json({ results: [{ name: 'טופו', price: { value: 12 }, images: [] }] });
   if (url.hostname === 'www.rami-levy.co.il') { assert.equal(JSON.parse(o.body).q, 'טופו'); return Response.json({ data: [{ name: 'טופו', price: { price: 10 } }] }); }
   if (url.hostname === 'www.carrefour.co.il') return new Response('blocked', { status: 403 });
+  if (url.hostname === 'hachishuk.co.il' && url.pathname.startsWith('/wp-json/')) return Response.json([{ name: 'טופו', permalink: 'https://hachishuk.co.il/p/1', prices: { price: '890', currency_minor_unit: 2 } }]);
   if (url.hostname === 'api.anthropic.com') {
     aiBody = JSON.parse(o.body);
     assert.equal(o.headers['anthropic-beta'], 'server-side-fallback-2026-07-01');
@@ -80,13 +86,14 @@ globalThis.fetch = async (u, o = {}) => {
   return new Response('<html></html>');
 };
 let r = await (await call('/prices?q=' + encodeURIComponent('טופו'))).json();
-assert.equal(r.chains.shufersal[0].price, 12); assert.equal(r.chains.rami[0].price, 10);
+assert.equal(r.chains.shufersal[0].price, 12); assert.equal(r.chains.rami[0].price, 10); assert.equal(r.chains.hachishuk[0].price, 8.9);
 assert.deepEqual(r.chains.carrefour, []); assert.ok(r.errors.carrefour);
-assert.equal(hosts.length, 4);
+const priceHosts = hosts.length;
+assert.ok(['www.shufersal.co.il', 'www.rami-levy.co.il', 'www.carrefour.co.il', 'shop.hazi-hinam.co.il', 'hachishuk.co.il'].every(h => hosts.includes(h)), 'all five chains searched');
 r = await (await call('/prices?q=' + encodeURIComponent('טופו'))).json();
-assert.ok(r.cached, 'a second press within minutes comes from KV'); assert.equal(hosts.length, 4);
+assert.ok(r.cached, 'a second press within minutes comes from KV'); assert.equal(hosts.length, priceHosts);
 await call('/prices?fresh=1&q=' + encodeURIComponent('טופו'));
-assert.equal(hosts.length, 8, 'fresh=1 searches again');
+assert.equal(hosts.length, priceHosts * 2, 'fresh=1 searches again');
 // הניתוח: בלי מפתח → 503; עם מפתח → רק בחירות שמצביעות על מוצר אמיתי
 assert.equal((await call('/advice', { method: 'POST', body: JSON.stringify({ items: [{ id: 'tofu', name: 'טופו' }] }) })).status, 503);
 env.ANTHROPIC_API_KEY = 'k';

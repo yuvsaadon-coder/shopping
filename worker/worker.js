@@ -13,8 +13,11 @@ export const CHAINS = {
   shufersal: { name: 'שופרסל', search: (q) => 'https://www.shufersal.co.il/online/he/search?text=' + encodeURIComponent(q) },
   rami: { name: 'רמי לוי', search: (q) => 'https://www.rami-levy.co.il/he/online/search?q=' + encodeURIComponent(q) },
   carrefour: { name: 'קרפור', search: (q) => 'https://www.carrefour.co.il/search?q=' + encodeURIComponent(q) },
-  hazi: { name: 'חצי חינם', search: (q) => 'https://shop.hazi-hinam.co.il/search?q=' + encodeURIComponent(q) }
+  hazi: { name: 'חצי חינם', search: (q) => 'https://shop.hazi-hinam.co.il/search?q=' + encodeURIComponent(q) },
+  // החישוק: סופר חברתי מקוון (משלוח לנקודות איסוף). כתובת האתר והפלטפורמה לא אומתו – מנסים כמה אפשרויות נפוצות.
+  hachishuk: { name: 'החישוק', search: (q) => HACHISHUK_BASES[0] + '/?s=' + encodeURIComponent(q) + '&post_type=product' }
 };
+export const HACHISHUK_BASES = ['https://hachishuk.co.il', 'https://www.hachishuk.co.il', 'https://hachishuk.org.il'];
 const MODEL = 'claude-opus-5-5';
 const UA = { 'user-agent': 'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Mobile Safari/537.36', 'accept-language': 'he-IL,he;q=0.9' };
 const MAX_RESULTS = 8;
@@ -116,6 +119,36 @@ export function parseHtmlProducts(html, base) {
   return out.filter(x => x.price && !seen.has(x.name) && seen.add(x.name)).slice(0, MAX_RESULTS);
 }
 
+// WooCommerce Store API (ציבורי): /wp-json/wc/store/v1/products?search=
+export function parseWooStore(list, base) {
+  return (Array.isArray(list) ? list : []).map(x => {
+    const pr = x.prices || {}, minor = Number(pr.currency_minor_unit ?? 2);
+    const price = pr.price != null ? Number(pr.price) / Math.pow(10, minor) : 0;
+    const promo = pr.regular_price && pr.sale_price && pr.regular_price !== pr.sale_price ? `מבצע (במקום ₪${Number(pr.regular_price) / Math.pow(10, minor)})` : '';
+    return product(String(x.name || '').replace(/<[^>]+>/g, ''), price, { image: (x.images && x.images[0] && x.images[0].src) || '', url: x.permalink || base, promo });
+  }).filter(x => x.name && x.price).slice(0, MAX_RESULTS);
+}
+// Shopify: /search/suggest.json?q=&resources[type]=product
+export function parseShopifySuggest(data, base) {
+  const list = (((data || {}).resources || {}).results || {}).products || [];
+  return list.map(x => product(x.title, x.price, { image: x.image || (x.featured_image && x.featured_image.url) || '', url: abs(x.url, base),
+    promo: x.compare_at_price_max && Number(x.compare_at_price_max) > Number(x.price) ? `מבצע (במקום ₪${x.compare_at_price_max})` : '' }))
+    .filter(x => x.name && x.price).slice(0, MAX_RESULTS);
+}
+async function hachishuk(q) {
+  const e = encodeURIComponent(q);
+  for (const base of HACHISHUK_BASES) {
+    const tries = [
+      async () => parseWooStore(await getJson(`${base}/wp-json/wc/store/v1/products?search=${e}&per_page=12`), base),
+      async () => parseShopifySuggest(await getJson(`${base}/search/suggest.json?q=${e}&resources[type]=product&resources[limit]=10`), base),
+      async () => parseHtmlProducts(await getHtml(`${base}/?s=${e}&post_type=product`), base),
+      async () => parseHtmlProducts(await getHtml(`${base}/search?q=${e}`), base)
+    ];
+    for (const t of tries) { try { const r = await t(); if (r.length) return r; } catch (err) { /* הבא בתור */ } }
+  }
+  return [];
+}
+
 async function getJson(url, init = {}) {
   const r = await fetch(url, { ...init, headers: { ...UA, accept: 'application/json', ...(init.headers || {}) }, signal: AbortSignal.timeout(9000) });
   if (!r.ok) throw new Error('http ' + r.status);
@@ -133,7 +166,8 @@ export const FETCHERS = {
   rami: async (q) => parseRami(await getJson('https://www.rami-levy.co.il/api/catalog', { method: 'POST',
     headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q, aggs: 1, store: '331' }) }), q),
   carrefour: async (q) => parseHtmlProducts(await getHtml(CHAINS.carrefour.search(q)), CHAINS.carrefour.search(q)),
-  hazi: async (q) => parseHtmlProducts(await getHtml(CHAINS.hazi.search(q)), CHAINS.hazi.search(q))
+  hazi: async (q) => parseHtmlProducts(await getHtml(CHAINS.hazi.search(q)), CHAINS.hazi.search(q)),
+  hachishuk
 };
 
 export async function shopPrices(env, q, { fresh = false } = {}) {
@@ -170,7 +204,7 @@ export function advicePrompt(items, prices, fees) {
     return `- id=${i.id} "${i.name}" qty=${i.qty}${i.note ? ` note="${i.note}"` : ''}\n${per}`;
   }).join('\n');
   const feeText = Object.entries(CHAINS).map(([c, x]) => `${c} (${x.name}): ₪${Number.isFinite(Number(fees[c])) ? Number(fees[c]) : 30}`).join(', ');
-  return `A family in Jerusalem wants to order these groceries online from one of: Shufersal (shufersal), Rami Levy (rami), Carrefour (carrefour), Hazi Hinam (hazi).
+  return `A family in Jerusalem wants to order these groceries online from one of: Shufersal (shufersal), Rami Levy (rami), Carrefour (carrefour), Hazi Hinam (hazi), HaChishuk (hachishuk, a non-profit online supermarket with pickup points).
 Below are live search results from each chain's website, with current prices and promotions.
 
 1. picks: for every item and every chain, give the index of the product that best matches what the family means (same kind of product, a sensible everyday size, respecting the note), or -1 if nothing in that chain's list is really that product. When sizes differ, compare by unit price; take promotions into account (e.g. "2 ב-20" when qty is 2). note: a very short Hebrew remark only when useful (a size or brand difference, a promotion), otherwise "".
