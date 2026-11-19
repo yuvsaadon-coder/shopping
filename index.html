@@ -170,6 +170,12 @@ h2.store { font-size: 18px; margin: 22px 0 0; padding-bottom: 4px; border-bottom
 h2.cat.stop b { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--c); color: #fff; font-size: 13px; margin-inline-end: 4px; }
 .store-pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0; } .store-pick .btn { border-inline-start: 5px solid var(--c, var(--line)); }
 .route-edit li { gap: 8px; } .rnum { width: 22px; text-align: center; color: var(--muted); }
+.fab { position: fixed; bottom: calc(78px + env(safe-area-inset-bottom)); inset-inline-start: 16px; z-index: 7; width: 58px; height: 58px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-ink); font-size: 26px; box-shadow: 0 4px 14px rgba(0,0,0,.25); cursor: pointer; display: none; }
+body[data-view="home"] .fab, body[data-view="list"]:not([data-shopping="1"]) .fab { display: block; }
+.mic-big { display: block; margin: 10px auto; width: 84px; height: 84px; border-radius: 50%; border: 0; background: var(--on); font-size: 38px; cursor: pointer; }
+.mic-big.on { background: var(--danger); color: #fff; animation: pulse 1.2s infinite ease-in-out; }
+.rec-state { text-align: center; color: var(--muted); font-size: 14px; min-height: 1.2em; margin: 0; }
+.sheet textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--ink); padding: 10px; margin-top: 8px; }
 .claude a.btn, .sheet a.btn { text-decoration: none; display: inline-block; }
 .sheet .list { max-height: 45vh; overflow: auto; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
@@ -184,6 +190,7 @@ h2.cat.stop b { display: inline-grid; place-items: center; width: 22px; height: 
   <button data-v="compare"><span>🏷️</span>איפה זול</button>
   <button data-v="settings"><span>⚙️</span>הגדרות</button>
 </nav>
+<button class="fab" data-voice aria-label="הקלטה בקול">🎤</button>
 <dialog id="editor"></dialog>
 <dialog id="sheet"></dialog>
 <div id="toast" role="status" hidden></div>

@@ -893,6 +893,115 @@ function receiptSheet(res, opts) {
   });
 }
 
+// ---------- הקלטה: "חסר חלב ושתי ביצים, תוריד את הטופו, עגבניות שלוש" ----------
+// זיהוי דיבור של הדפדפן (עברית) → Claude מתרגם לפעולות על הרשימה → מאשרים. בלי Claude: פענוח פשוט לפי מילים.
+const VOICE_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['actions'],
+  properties: { actions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['op', 'id', 'name', 'qty'],
+    properties: { op: { type: 'string', enum: ['need', 'remove', 'qty'] }, id: { type: 'string' }, name: { type: 'string' }, qty: { type: 'integer' } } } } }
+};
+const HE_NUM = { 'אחד': 1, 'אחת': 1, 'שניים': 2, 'שתיים': 2, 'שני': 2, 'שתי': 2, 'שלוש': 3, 'שלושה': 3, 'ארבע': 4, 'ארבעה': 4, 'חמש': 5, 'חמישה': 5, 'שש': 6, 'שישה': 6, 'שבע': 7, 'שבעה': 7, 'שמונה': 8, 'תשע': 9, 'תשעה': 9, 'עשר': 10, 'עשרה': 10, 'זוג': 2 };
+const REMOVE_RE = /(תוריד|להוריד|תורידי|תמחק|למחוק|תמחקי|לא צריך|לא צריכים|יש כבר|כבר יש|קנינו|בלי)/;
+// פענוח מקומי (גיבוי): פסיקים / "ו" מחברים, מספר במילים או בספרות, ומילות הורדה
+export function parseVoiceLocal(text, products) {
+  const out = [];
+  let mode = 'need';
+  for (let part of String(text).split(/[,.;\n]+|\s+וגם\s+|\s+ו(?=[֐-׿]{2})/)) {
+    part = part.trim(); if (!part) continue;
+    if (REMOVE_RE.test(part)) mode = 'remove'; else if (/(חסר|צריך|תוסיף|להוסיף|תוסיפי|נגמר)/.test(part)) mode = 'need';
+    const clean = (' ' + part.replace(REMOVE_RE, ' ') + ' ').replace(/(?<=\s)(חסר|חסרים|חסרה|צריך|צריכים|תוסיף|תוסיפי|להוסיף|נגמר|נגמרו|את|גם|עוד|לרשימה|מהרשימה|כמות|יחידות|של)(?=\s)/g, ' ');
+    let qty = 0;
+    const d = clean.match(/\d+/); if (d) qty = Number(d[0]);
+    for (const [w, n] of Object.entries(HE_NUM)) if (new RegExp(`(^|\\s)${w}(\\s|$)`).test(clean)) qty = qty || n;
+    const words = norm(clean.replace(/\d+/g, ' ')).split(' ').filter(w => w.length > 1 && !HE_NUM[w]);
+    if (!words.length) continue;
+    const phrase = words.join(' ');
+    let best = null, bestSc = 0;
+    for (const p of products) {
+      const pn = norm(p.name);
+      const sc = pn === phrase ? 100 : words.filter(w => pn.includes(w) || pn.includes(w.replace(/^ה/, ''))).length / Math.max(words.length, pn.split(' ').length);
+      if (sc > bestSc) { best = p; bestSc = sc; }
+    }
+    if (best && bestSc >= 0.5) out.push({ op: mode === 'remove' ? 'remove' : (qty && best.need ? 'qty' : 'need'), id: best.id, name: best.name, qty: qty || 0 });
+    else if (mode !== 'remove') out.push({ op: 'need', id: '', name: phrase, qty: qty || 0 });
+  }
+  return out;
+}
+async function parseVoice(text) {
+  const products = live();
+  try {
+    const prompt = `VOICE COMMANDS for a family's Hebrew shopping list. Turn what was said into actions on the list.
+op "need": the item is missing / should be added (qty if a number was said, else 0). op "remove": take it off the list (said they have it, bought it, or asked to remove). op "qty": change the quantity of an item already on the list.
+id: the matching product id from the list below, or "" if it is a new product (then name = the product name as said, cleaned up). name: the product's name. Never invent products that were not said. Ignore filler words.
+
+What was said: "${text.replace(/"/g, "'")}"
+
+Products (id: name${products.some(p => p.need) ? ' – [on list ×qty]' : ''}):
+${products.map(p => `${p.id}: ${p.name}${p.need ? ` [on list ×${p.qty || 1}]` : ''}`).join('\n')}`;
+    const r = await fetch(AI_SERVER + '/v1/messages', { method: 'POST', headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 2000, output_config: { format: { type: 'json_schema', schema: VOICE_SCHEMA } }, messages: [{ role: 'user', content: prompt }] }) });
+    const msg = await r.json();
+    if (!r.ok || msg.stop_reason === 'refusal') throw new Error('ai');
+    const res = JSON.parse((msg.content || []).filter(b => b.type === 'text').map(b => b.text).join(''));
+    return (res.actions || []).filter(a => a && (a.id ? S.items[a.id] && !S.items[a.id].deleted : a.name && a.op === 'need'));
+  } catch (e) {
+    return parseVoiceLocal(text, products);
+  }
+}
+let recog = null;
+function voiceSheet() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const form = sheet(`<h3>🎤 מה חסר?</h3>
+    <p class="note">${SR ? 'מדברים, למשל: "חסר חלב ושתי ביצים, תוריד את הטופו, עגבניות שלוש".' : 'הדפדפן הזה לא תומך בהקלטה – אפשר לכתוב, למשל: "חסר חלב ושתי ביצים, תוריד את הטופו".'}</p>
+    ${SR ? '<button type="button" class="mic-big" data-rec aria-label="הקלטה">🎤</button><p class="rec-state" aria-live="polite"></p>' : ''}
+    <textarea name="said" rows="3" placeholder="מה שנאמר יופיע כאן (אפשר גם לכתוב או לתקן)"></textarea>
+    <div class="row-btns"><button class="btn primary" value="go">המשך</button><button class="btn" value="cancel" formnovalidate>ביטול</button></div>`,
+  (v, f) => { stopRec(); if (v === 'go' && f.said.value.trim()) runVoice(f.said.value.trim()); });
+  if (!SR) return;
+  const btn = $('[data-rec]', form), state = $('.rec-state', form);
+  const start = () => {
+    try {
+      recog = new SR(); recog.lang = 'he-IL'; recog.continuous = true; recog.interimResults = true;
+      const base = form.said.value ? form.said.value + ' ' : '';
+      recog.onresult = (e) => { let t = ''; for (let k = 0; k < e.results.length; k++) t += e.results[k][0].transcript; form.said.value = base + t; };
+      recog.onend = () => { btn.classList.remove('on'); state.textContent = form.said.value ? 'אפשר לתקן ולהמשיך' : ''; recog = null; };
+      recog.onerror = (e) => { state.textContent = e.error === 'not-allowed' ? 'צריך לאשר גישה למיקרופון' : 'ההקלטה נעצרה'; };
+      recog.start(); btn.classList.add('on'); state.textContent = 'מקשיב… (לחיצה נוספת – עצירה)';
+    } catch (e) { state.textContent = 'ההקלטה לא התחילה'; }
+  };
+  btn.addEventListener('click', () => { if (recog) stopRec(); else start(); });
+  start();
+}
+function stopRec() { if (recog) { try { recog.stop(); } catch (e) { /* כבר נעצר */ } } }
+async function runVoice(text) {
+  sheet(`<h3>🎤 מבין מה ביקשת…</h3><div class="dots"><i></i><i></i><i></i></div><p class="note">"${esc(text)}"</p>`, () => {});
+  const acts = await parseVoice(text);
+  if (!acts.length) { const dlg = $('#sheet'); dlg.onclose = null; dlg.close(); toast('לא הבנתי איזה מוצרים. אפשר לנסות שוב'); return; }
+  const label = (a) => { const i = a.id && S.items[a.id];
+    if (a.op === 'remove') return `➖ להוריד מהרשימה: <b>${esc(i ? i.name : a.name)}</b>`;
+    if (a.op === 'qty') return `🔢 <b>${esc(i ? i.name : a.name)}</b>: כמות ${a.qty || 1}`;
+    return `➕ חסר: <b>${esc(i ? i.name : a.name)}</b>${a.qty > 1 ? ` ×${a.qty}` : ''}${i ? '' : ' <small>(מוצר חדש)</small>'}`; };
+  sheet(`<h3>🎤 לעדכן את הרשימה?</h3><p class="note">"${esc(text)}"</p>
+    <ul class="list compact">${acts.map((a, k) => `<li><label class="check"><input type="checkbox" name="a" value="${k}" checked><span><span class="nm">${label(a)}</span></span></label>
+      ${!a.id && a.op === 'need' ? `<select name="kind${k}" aria-label="חד פעמי או קבוע"><option value="once">חד פעמי</option><option value="fixed">קבוע</option></select>` : ''}</li>`).join('')}</ul>
+    <div class="row-btns"><button class="btn primary" value="ok">עדכון</button><button class="btn" value="again" formnovalidate>להקליט שוב</button><button class="btn ghost" value="cancel" formnovalidate>ביטול</button></div>`,
+  (v, f) => {
+    if (v === 'again') { voiceSheet(); return; }
+    if (v !== 'ok') return;
+    let n = 0;
+    for (const k of [...f.querySelectorAll('input[name=a]:checked')].map(x => Number(x.value))) {
+      const a = acts[k], i = a.id && S.items[a.id]; n++;
+      if (a.op === 'remove' && i) S.items[i.id] = { ...i, need: false, got: false, qty: 1, at: now() };
+      else if (i) S.items[i.id] = { ...i, need: true, qty: Math.max(1, Math.min(99, a.qty || (a.op === 'qty' ? 1 : i.qty || 1))), snooze: 0, by: i.need ? i.by : me(), at: now() };
+      else if (a.name) {
+        const nid = 'u' + now().toString(36) + Math.random().toString(36).slice(2, 5);
+        S.items[nid] = { id: nid, name: a.name, kind: (f['kind' + k] && f['kind' + k].value) || 'once', cat: 'pantry', emoji: guessEmoji(a.name), q: '', note: '', count: 0, need: true, qty: Math.max(1, a.qty || 1), got: false, hist: [], by: me(), at: now() };
+      }
+    }
+    save(); render(); toast(n === 1 ? 'עודכן מוצר אחד' : `עודכנו ${n} מוצרים`);
+  });
+}
+
 // ---------- הגדרות ----------
 function settingsView() {
   const removed = Object.values(S.items).filter(i => i.deleted && i.kind !== 'once');
@@ -1028,6 +1137,7 @@ document.addEventListener('click', (e) => {
     if (!i.got) { S.trail = S.trail || []; if (S.trail[S.trail.length - 1] !== i.cat) S.trail.push(i.cat); }
     touch(d.cart, { got: !i.got }); if (navigator.vibrate) navigator.vibrate(10);
   }
+  else if ('voice' in d) voiceSheet();
   else if ('startShop' in d) startShop();
   else if (d.startShopAt) startShop(d.startShopAt);
   else if (d.routeEdit) routeEditor(d.routeEdit);

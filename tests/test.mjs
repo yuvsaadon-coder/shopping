@@ -118,7 +118,7 @@ const http = createServer(async (req, res) => {
 await new Promise(ok => http.listen(0, ok));
 const BASE = `http://localhost:${http.address().port}/shopping/`;
 
-const server = { scanCalls: [], list: null, compare: null, priceCalls: [], adviceCalls: [], adviceOff: false };
+const server = { voiceCalls: [], voiceOff: false, scanCalls: [], list: null, compare: null, priceCalls: [], adviceCalls: [], adviceOff: false };
 const PRICES = {   // קרפור לא מוצאת ביצים
   'ביצים L': { shufersal: 30, rami: 26, hazi: 25 }, 'טופו': { shufersal: 12, rami: 10, carrefour: 11, hazi: 13 }, 'עגבניות שרי': { shufersal: 9, rami: 8, carrefour: 10, hazi: 9 }
 };
@@ -161,7 +161,15 @@ async function mock(ctx) {
   await ctx.route('https://books.yuvsaadon.workers.dev/v1/messages', async (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'POST, OPTIONS' };
     if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
-    const b = JSON.parse(route.request().postData()); server.scanCalls.push(b);
+    const b = JSON.parse(route.request().postData());
+    if (JSON.stringify(b).includes('VOICE COMMANDS')) {
+      server.voiceCalls.push(b);
+      if (server.voiceOff) return route.fulfill({ status: 500, json: { error: { type: 'x' } }, headers: cors });
+      return route.fulfill({ json: { stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ actions: [
+        { op: 'need', id: 'milk', name: 'חלב', qty: 0 }, { op: 'need', id: 'eggs', name: 'ביצים', qty: 2 }, { op: 'remove', id: 'tofu', name: 'טופו', qty: 0 },
+        { op: 'need', id: '', name: 'פופקורן', qty: 0 }, { op: 'need', id: 'ghost', name: 'מומצא', qty: 0 }] }) }] }, headers: cors });
+    }
+    server.scanCalls.push(b);
     const text = JSON.stringify({ store: 'רמי לוי', items: [
       { text: 'ביצים L 12', id: 'eggs', qty: 2, price: 50 }, { text: 'חלב 3% 1ל', id: 'milk', qty: 1, price: 6.9 }, { text: 'שקית', id: '', qty: 1, price: 0.1 }, { text: 'בדוי', id: 'nope', qty: 1, price: 1 }] });
     return route.fulfill({ json: { stop_reason: 'end_turn', content: [{ type: 'text', text }] }, headers: cors });
@@ -467,6 +475,35 @@ await a.getByRole('button', { name: /מה חסר/ }).click();
 await a.click('[data-toggle="mushrooms"]');
 await a.waitForFunction(() => document.querySelector('#sync').dataset.s === 'off');
 assert.equal(await count(a), '3');
+// הקלטה / כתיבה חופשית: Claude מתרגם לפעולות, מאשרים
+await a.context().route('https://shopping123.yuvsaadon.workers.dev/**', r => r.abort());
+await a.getByRole('button', { name: /מה חסר/ }).click();
+await a.locator('[data-toggle="tofu"]').evaluate(el => { if (el.getAttribute('aria-pressed') !== 'true') el.click(); });
+await a.locator('.fab').click();
+await a.locator('#sheet textarea[name=said]').fill('חסר חלב ושתי ביצים, תוריד את הטופו, וגם פופקורן');
+await a.locator('#sheet').getByRole('button', { name: 'המשך' }).click();
+await a.locator('#sheet').getByRole('heading', { name: /לעדכן את הרשימה/ }).waitFor();
+assert.ok(server.voiceCalls[0].messages[0].content.includes('milk: חלב'));
+const voiceText = await a.locator('#sheet').textContent();
+assert.match(voiceText, /חסר: חלב[\s\S]*חסר: ביצים ×2[\s\S]*להוריד מהרשימה: טופו[\s\S]*חסר: פופקורן \(מוצר חדש\)/);
+assert.doesNotMatch(voiceText, /מומצא/, 'unknown id dropped');
+await a.locator('#sheet').getByRole('button', { name: 'עדכון' }).click();
+await a.locator('#toast', { hasText: 'עודכנו 4 מוצרים' }).waitFor();
+const vs = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).items);
+assert.ok(vs.milk.need && vs.eggs.need && vs.eggs.qty === 2 && !vs.tofu.need);
+const pop = Object.values(vs).find(i => i.name === 'פופקורן');
+assert.ok(pop && pop.need && pop.kind === 'once' && pop.emoji === '🍿');
+// בלי Claude: פענוח פשוט לפי מילים
+server.voiceOff = true;
+await a.locator('.fab').click();
+await a.locator('#sheet textarea[name=said]').fill('תוריד את החלב');
+await a.locator('#sheet').getByRole('button', { name: 'המשך' }).click();
+await a.locator('#sheet').getByRole('heading', { name: /לעדכן את הרשימה/ }).waitFor();
+assert.match(await a.locator('#sheet').textContent(), /להוריד מהרשימה: חלב/);
+await a.locator('#sheet').getByRole('button', { name: 'עדכון' }).click();
+await a.waitForFunction(() => !JSON.parse(localStorage.getItem('shop-state-v2')).items.milk.need);
+const local = await a.evaluate(async () => { const m = await import('./app.js'); return m.parseVoiceLocal('חסר עגבניות שרי ושלוש ביצים, תוריד טופו', [{ id: 'cherry', name: 'עגבניות שרי' }, { id: 'eggs', name: 'ביצים', need: false }, { id: 'tofu', name: 'טופו' }, { id: 'tomatoes', name: 'עגבניות' }]); });
+assert.deepEqual(local.map(x => [x.op, x.id, x.qty]), [['need', 'cherry', 0], ['need', 'eggs', 3], ['remove', 'tofu', 0]]);
 if (process.env.SHOTS) for (const v of ['home', 'list', 'settings']) { await b.evaluate((v) => document.querySelector(`nav [data-v="${v}"]`).click(), v); await b.waitForTimeout(300); await b.screenshot({ path: `${process.env.SHOTS}/${v}.png`, fullPage: true }); }
 // אם השרת פעיל בשם shopping (ולא kniyot), האפליקציה מוצאת אותו לבד
 const c = await phone('יעל');
