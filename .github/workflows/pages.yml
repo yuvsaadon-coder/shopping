@@ -24,11 +24,11 @@ jobs:
       - name: מחירים לפי סניף (קבצי שקיפות המחירים)
         continue-on-error: true
         timeout-minutes: 20
-        run: python3 tools/branch_prices.py
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tools/branch_prices.py
       - uses: actions/configure-pages@v5
         with:
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v4
         with:
           path: .
       - id: deployment
