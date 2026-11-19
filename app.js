@@ -209,7 +209,7 @@ function homeView() {
       <button class="btn sm primary" data-soon-add="${i.id}">חסר</button><button class="btn sm ghost" data-snooze="${i.id}">עוד יש</button></li>`).join('')}</ul></section>` : '';
   const badge = (i) => isOrdered(i) ? '<span class="badge truck" title="בדרך במשלוח">🚚</span>'
     : i.need ? `<span class="badge">${i.qty > 1 ? '×' + i.qty : '✓'}</span>` : '';
-  return installBanner() + `<section class="hero"><h1>מה חסר בבית?</h1><p>${needed().length ? `${needed().length} מוצרים ברשימה` : 'לוחצים על מה שנגמר, וזה עובר לרשימה'}</p></section>
+  return installBanner() + `<section class="hero"><h1>מה חסר בבית?</h1><p>${needed().length ? `${needed().length} מוצרים ברשימה` : 'לוחצים על מה שנגמר, וזה עובר לרשימה · לחיצה ארוכה על מוצר לעריכה'}</p></section>
     <div class="search"><input id="q" type="search" placeholder="חיפוש או הוספת מוצר…" value="${esc(filter)}" aria-label="חיפוש מוצר" enterkeyhint="done"></div>
     ${chips}${soon}
     ${groups.map(g => `<h2 class="cat" style="--c:${g.c.color}">${g.c.icon} ${esc(g.c.name)}</h2><div class="grid">${g.list.map(i => `
@@ -803,7 +803,7 @@ function openEditor(id, name = '') {
     if (isNew) {
       const nid = 'u' + now().toString(36) + Math.random().toString(36).slice(2, 5);
       S.items[nid] = { id: nid, ...data, count: 0, need: true, qty: 1, got: false, hist: [], by: me(), at: now() };
-      filter = ''; save(); render(); toast(`"${nm}" נוסף לרשימה${data.kind === 'once' ? ' (חד פעמי)' : ''}`);
+      filter = ''; save(); render(); toast(`"${nm}" נוסף לרשימה${data.kind === 'once' ? ' (חד פעמי)' : ''}`, { label: 'עריכה', fn: () => openEditor(nid) });
     } else touch(id, data);
   };
   dlg.returnValue = '';
@@ -812,7 +812,13 @@ function openEditor(id, name = '') {
 }
 
 let toastTimer;
-function toast(t) { const el = $('#toast'); el.textContent = t; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 3200); }
+// action: { label, fn } – כפתור בתוך ההודעה (למשל "עריכה" מיד אחרי הוספה)
+function toast(t, action) {
+  const el = $('#toast');
+  el.textContent = t;
+  if (action) { const b = document.createElement('button'); b.className = 'toast-act'; b.textContent = action.label; b.onclick = () => { el.hidden = true; action.fn(); }; el.append(' ', b); }
+  el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, action ? 5000 : 3200);
+}
 
 function shareText() {
   const groups = CATS.map(c => ({ c, list: needed().filter(i => i.cat === c.id) })).filter(g => g.list.length);
@@ -832,7 +838,22 @@ function setNeed(id, on) {
 }
 
 // ---------- אירועים ----------
+// לחיצה ארוכה (או קליק ימני) על מוצר – עריכה: שם, קטגוריה, חד פעמי/קבוע וכו'
+let pressTimer = null, pressStart = null, suppressClick = false;
+const pressTarget = (e) => e.target.closest && e.target.closest('[data-toggle], [data-cart]');
+document.addEventListener('pointerdown', (e) => {
+  const t = pressTarget(e); if (!t) return;
+  pressStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(() => { suppressClick = true; if (navigator.vibrate) navigator.vibrate(20); openEditor(t.dataset.toggle || t.dataset.cart); }, 550);
+});
+const cancelPress = () => { clearTimeout(pressTimer); pressTimer = null; };
+document.addEventListener('pointerup', cancelPress);
+document.addEventListener('pointercancel', cancelPress);
+document.addEventListener('pointermove', (e) => { if (pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) cancelPress(); });
+document.addEventListener('contextmenu', (e) => { const t = pressTarget(e); if (!t) return; e.preventDefault(); cancelPress(); openEditor(t.dataset.toggle || t.dataset.cart); });
 document.addEventListener('click', (e) => {
+  if (suppressClick) { suppressClick = false; if (pressTarget(e)) { e.preventDefault(); return; } }
   const t = e.target.closest('button');
   if (!t || t.closest('dialog')) return;
   const d = t.dataset;

@@ -199,6 +199,27 @@ assert.ok(await a.locator('#editor[open]').count(), 'cannot save before choosing
 await a.locator('#editor .seg label', { hasText: 'חד פעמי' }).click();
 await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
 await waitCount(a, '4');
+// מיד אחרי ההוספה: "עריכה" בהודעה – תיקון שגיאת כתיב וקטגוריה
+await a.locator('#toast .toast-act').click();
+await a.locator('#editor input[name=name]').fill('במבה נוגט');
+await a.locator('#editor select[name=cat]').selectOption('frozen');
+await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
+await a.locator('h2.cat', { hasText: 'קפואים' }).locator('xpath=following-sibling::div[1]').locator('.tile', { hasText: 'במבה נוגט' }).waitFor();
+// לחיצה ארוכה על אריח פותחת עריכה (ולא מסמנת/מורידה מהרשימה)
+await a.locator('[data-toggle="tofu"]').scrollIntoViewIfNeeded();
+const box = await a.locator('[data-toggle="tofu"]').boundingBox();
+await a.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+await a.mouse.down(); await a.waitForTimeout(800); await a.mouse.up();
+await a.locator('#editor[open]').waitFor();
+assert.equal(await a.locator('#editor input[name=name]').inputValue(), 'טופו');
+await a.locator('#editor').getByRole('button', { name: 'ביטול' }).click();
+assert.equal(await count(a), '4', 'long press did not toggle');
+await a.locator('#editor').getByRole('button', { name: 'ביטול' }).waitFor({ state: 'hidden' });
+// להחזיר את השם, כי שאר הבדיקות מחפשות "במבה"
+await a.locator('[data-toggle]', { hasText: 'במבה נוגט' }).click({ button: 'right' });
+await a.locator('#editor input[name=name]').fill('במבה');
+await a.locator('#editor select[name=cat]').selectOption('pantry');
+await a.locator('#editor').getByRole('button', { name: 'שמירה' }).click();
 
 // הרשימה
 await a.getByRole('button', { name: /הרשימה/ }).click();
