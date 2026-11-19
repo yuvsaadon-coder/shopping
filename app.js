@@ -31,6 +31,7 @@ export const CHAINS = [
   { id: 'hazi', name: 'חצי חינם', color: '#e07b00', url: 'https://shop.hazi-hinam.co.il/search?q=' },
   { id: 'hachishuk', name: 'החישוק', color: '#7b3fa0', url: 'https://hahishook.com/?post_type=product&s=' }
 ];
+const ONLINE = CHAINS;
 const DEFAULT_FEE = 30;   // דמי משלוח משוערים; אפשר לשנות בהגדרות
 
 const $ = (s, el = document) => el.querySelector(s);
@@ -420,7 +421,7 @@ export function pickProduct(item, chain, results, prefs = {}, advice = null) {
   }
   return best;
 }
-export function basket(items, compare, prefs = {}, fees = {}) {
+export function basket(items, compare, prefs = {}, fees = {}, CHAINS = ONLINE) {
   const prices = (compare && compare.prices) || {}, advice = compare && compare.advice;
   const rows = items.filter(i => prices[i.id]).map(i => {
     const cells = {};
@@ -439,7 +440,7 @@ export function basket(items, compare, prefs = {}, fees = {}) {
   const maxFound = Math.max(0, ...totals.map(t => t.found));
   const ranked = [...totals].sort((a, b) => (a.common + a.fee) - (b.common + b.fee));
   const best = ranked.find(t => t.found >= maxFound - 1) || ranked[0] || null;
-  return { rows, totals: ranked, best, commonCount: common.length };
+  return { rows, totals: ranked, best, commonCount: common.length, chains: CHAINS };
 }
 
 // שומרים רק את מה שצריך מכל תוצאה, כדי שההשוואה תעבור מהר לשאר המכשירים
@@ -542,14 +543,15 @@ function compareView() {
 }
 // ---------- איך להזמין: רשת אחת, או פיצול לשתיים כשזה חוסך יותר מהמשלוח הנוסף ----------
 const SPLIT_MIN_SAVING = 5;   // מתחת לזה לא שווה את הטרחה של שתי הזמנות
-export function orderPlan(b, fees) {
+export function orderPlan(b, fees, { split = true } = {}) {
+  const CHAINS = b.chains || ONLINE;
   const rows = b.rows.filter(r => CHAINS.some(c => r.cells[c.id]));
   if (!rows.length) return null;
   // מוצר שלא נמצא בתוכנית ייקנה בכל זאת במקום אחר: "קנס" = החציון של המחירים שלו
   const penalty = (r) => { const v = CHAINS.map(c => r.cells[c.id] && r.cells[c.id].total).filter(Boolean).sort((x, y) => x - y); return v[Math.floor(v.length / 2)] || 0; };
   const fee = (id) => Number.isFinite(fees[id]) ? fees[id] : DEFAULT_FEE;
   const plans = [];
-  for (const a of CHAINS) for (const c of [null, ...CHAINS]) {
+  for (const a of CHAINS) for (const c of [null, ...(split ? CHAINS : [])]) {
     if (c && c.id <= a.id) continue;
     const parts = { [a.id]: [] }; if (c) parts[c.id] = [];
     let cost = fee(a.id) + (c ? fee(c.id) : 0), missing = [];
@@ -625,12 +627,13 @@ function claudeBox(b, list, plan) {
 // הסבר להמלצה: כמה יעלה (מוצרים + משלוח), בכמה זה זול מהאפשרות הבאה, מה חסר ומה במבצע
 function recText(b, plan) {
   const parts = [];
-  const sum = plan.chains.reduce((t, ch) => t + plan.parts[ch.id].reduce((x, r) => x + r.cells[ch.id].total, 0) + fee(ch.id), 0);
-  parts.push(`בערך ${money(sum)} כולל ${plan.chains.length === 2 ? 'שני משלוחים' : 'משלוח'}`);
+  const inStore = b.chains && b.chains !== CHAINS;
+  const sum = plan.chains.reduce((t, ch) => t + plan.parts[ch.id].reduce((x, r) => x + r.cells[ch.id].total, 0) + (inStore ? 0 : fee(ch.id)), 0);
+  parts.push(inStore ? `בערך ${money(sum)} על מה שנמצא` : `בערך ${money(sum)} כולל ${plan.chains.length === 2 ? 'שני משלוחים' : 'משלוח'}`);
   const next = plan.chains.length === 2 ? plan.singles[0] : plan.singles[1];
   if (next) { const d = next.cost - plan.cost; if (d >= 1) parts.push(`זול ב-${money(d)} מ${next.chains[0].name}`); }
   if (plan.missing.length) parts.push(plan.missing.length === 1 ? 'מוצר אחד לא נמצא שם' : `${plan.missing.length} מוצרים לא נמצאו שם`);
-  const none = b.rows.filter(r => !CHAINS.some(c => r.cells[c.id])).length;
+  const none = b.rows.filter(r => !(b.chains || CHAINS).some(c => r.cells[c.id])).length;
   if (none) parts.push(none === 1 ? 'מוצר אחד לא נמצא באף רשת' : `${none} מוצרים לא נמצאו באף רשת`);
   const promos = plan.chains.reduce((t, ch) => t + plan.parts[ch.id].filter(r => r.cells[ch.id].promo).length, 0);
   if (promos) parts.push(promos === 1 ? 'מוצר אחד במבצע' : `${promos} מוצרים במבצע`);
@@ -640,6 +643,146 @@ function linksTable(list) {
   return `<h2 class="cat">חיפוש ידני בכל רשת</h2><ul class="list links">${list.map(i => `<li>${tileArt(i, true)}<span class="nm">${esc(i.name)}</span><span class="lk">${CHAINS.map(c => `<a style="--c:${c.color}" href="${searchUrl(c, i)}" target="_blank" rel="noopener">${c.name}</a>`).join('')}</span></li>`).join('')}</ul>`;
 }
 
+
+// ---------- סניפים: השוואת מחירים בסניף עצמו (קבצי שקיפות המחירים, מתעדכנים כל בוקר) ----------
+// הנתונים: data/branches/*.json, נבנים ב-GitHub Actions (tools/branch_prices.py) ומתפרסמים עם האתר
+export const BRANCHES = [
+  { id: 'rami-givat-shaul', name: 'רמי לוי גבעת שאול', short: 'רמי לוי ג. שאול', color: '#0a58a8' },
+  { id: 'rami-talpiot', name: 'רמי לוי תלפיות', short: 'רמי לוי תלפיות', color: '#2f7fd0' },
+  { id: 'shufersal-talpiot', name: 'שופרסל תלפיות', short: 'שופרסל תלפיות', color: '#d8232a' },
+  { id: 'shufersal-nayot', name: 'שופרסל ניות', short: 'שופרסל ניות', color: '#a8151b' },
+  { id: 'osherad-talpiot', name: 'אושר עד תלפיות', short: 'אושר עד תלפיות', color: '#1b8a4c' },
+  { id: 'osherad-givat-shaul', name: 'אושר עד גבעת שאול', short: 'אושר עד ג. שאול', color: '#0f6a37' }
+];
+const branchOf = (id) => BRANCHES.find(b => b.id === id);
+const norm = (s) => String(s || '').replace(/[״"'׳`]/g, '').replace(/[^֐-׿a-zA-Z0-9% ]/g, ' ').replace(/\s+/g, ' ').trim();
+// חיפוש מוצר בקטלוג של סניף: כל מילות החיפוש בשם (או הכי הרבה שאפשר), שם שמתחיל במילה הראשונה קודם, ואז הזול
+export function searchCatalog(rows, item, n = 6) {
+  const qw = norm(item.q || item.name).split(' ').filter(w => w.length > 1);
+  const nw = norm(item.name).split(' ').filter(w => w.length > 1);
+  const words = [...new Set([...qw, ...nw])];
+  if (!words.length) return [];
+  const scored = [];
+  for (const r of rows) {
+    const nm = r._n || (r._n = ' ' + norm(r[0]) + ' ');
+    let sc = 0; for (const w of words) if (nm.includes(w)) sc++;
+    if (!sc) continue;
+    const allQ = qw.every(w => nm.includes(w));
+    scored.push({ r, sc: sc + (allQ ? 2 : 0) + (nm.startsWith(' ' + (qw[0] || nw[0]) + ' ') ? 1 : 0) });
+  }
+  if (!scored.length) return [];
+  const top = Math.max(...scored.map(x => x.sc));
+  return scored.filter(x => x.sc >= top - 0.5 && x.sc >= Math.min(2, words.length))
+    .sort((a, b) => b.sc - a.sc || a.r[1] - b.r[1]).slice(0, n)
+    .map(({ r }) => { const m = /^([\d.]+)\s*(.*)$/.exec(r[3] || ''); return { name: r[0], price: r[1], unit: r[2] || '', promo: r[4] || '', image: '', url: '', unitPrice: m ? { value: Number(m[1]), per: m[2] } : null }; });
+}
+let branchIndex = null;
+async function loadBranchIndex() {
+  if (branchIndex) return branchIndex;
+  try { const r = await fetch('data/branches/index.json', { cache: 'no-store' }); branchIndex = r.ok ? await r.json() : { branches: [] }; }
+  catch (e) { branchIndex = { branches: [] }; }
+  return branchIndex;
+}
+let branchCmp = null;   // מצב ריצה
+async function runBranchCompare() {
+  const list = needed().filter(i => storeOf(i.cat) === 'super');
+  if (!list.length) return;
+  branchCmp = { done: 0, total: 0 }; render();
+  const idx = await loadBranchIndex();
+  const avail = (idx.branches || []).filter(b => branchOf(b.id));
+  if (!avail.length) { branchCmp = null; render(); toast('עוד אין נתוני מחירים לסניפים. הם מתעדכנים כל בוקר'); return; }
+  branchCmp.total = avail.length; render();
+  const prices = {}, got = [];
+  await Promise.all(avail.map(async (b) => {
+    try {
+      const d = await fetch(`data/branches/${b.id}.json`).then(r => r.json());
+      for (const it of list) (prices[it.id] = prices[it.id] || {})[b.id] = searchCatalog(d.items || [], it);
+      got.push({ id: b.id, updated: d.updated, store: d.storeName, address: d.address });
+    } catch (e) { /* הסניף הזה לא נטען */ }
+    branchCmp.done++; const bar = $('#progress'); if (bar) { bar.value = branchCmp.done; $('#progress-t').textContent = `${branchCmp.done}/${branchCmp.total}`; }
+  }));
+  S.branchCompare = { at: now(), updated: idx.updated, qty: Object.fromEntries(list.map(i => [i.id, i.qty || 1])), prices, branches: got.map(g => g.id), info: got };
+  branchCmp = null; save(false); render();
+}
+function branchView() {
+  const list = needed().filter(i => storeOf(i.cat) === 'super');
+  const head = `<section class="hero"><h1>באיזה סניף הכי זול?</h1><p>${BRANCHES.map(b => b.short).join(' · ')}</p></section>`;
+  if (branchCmp) return head + `<div class="wait"><b>טוען את המחירים של הסניפים…</b><div class="progress"><progress id="progress" max="${branchCmp.total || 1}" value="${branchCmp.done}"></progress><span id="progress-t">${branchCmp.done}/${branchCmp.total}</span></div></div>`;
+  if (!list.length) return head + `<p class="note">קודם בוחרים מה חסר, ואז משווים כאן.</p><button class="btn primary wide" data-go="home">למסך מה חסר</button>`;
+  const C = S.branchCompare;
+  const btn = `<button class="btn primary wide big" data-branch-compare>🏬 ${C ? 'השוואה מחדש' : 'השוואה בין הסניפים'} ל-${list.length} מוצרים</button>`;
+  if (!C) return head + btn + `<p class="note">המחירים מהקבצים שכל סניף מפרסם לפי חוק (כולל מבצעים), ומתעדכנים כל בוקר.</p>`;
+  const chains = BRANCHES.filter(b => C.branches.includes(b.id));
+  const b = basket(list, C, S.prefs, {}, chains);
+  const plan = orderPlan(b, Object.fromEntries(chains.map(c => [c.id, 0])), { split: false });
+  const stale = list.some(i => !C.prices[i.id]);
+  const rec = plan ? `<div class="rec"><div class="rec-h">🏆 הכי משתלם: <b>${plan.chains[0].name}</b></div><p>${recText(b, plan)}</p>
+    <div class="row-btns"><button class="btn primary" data-start-shop-at="${plan.chains[0].id}">🛒 יוצאים לקניות ב${plan.chains[0].short}</button></div></div>` : '';
+  const ranked = plan ? [...plan.singles].sort((x, y) => x.cost - y.cost) : [];
+  const cards = ranked.map(p => { const ch = p.chains[0]; const found = b.rows.filter(r => r.cells[ch.id]); const sum = found.reduce((t, r) => t + r.cells[ch.id].total, 0);
+    return `<div class="chain${plan && ch.id === plan.chains[0].id ? ' best' : ''}" style="--c:${ch.color}"><div class="chain-h"><b>${ch.name}</b>${plan && ch.id === plan.chains[0].id ? '<span class="tag">מומלץ</span>' : ''}</div>
+      <div class="sum">${money(sum)}</div><div class="sub">נמצאו ${found.length} מתוך ${b.rows.length}${found.filter(r => r.cells[ch.id].promo).length ? ` · ${found.filter(r => r.cells[ch.id].promo).length} במבצע` : ''}</div></div>`; }).join('');
+  const table = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>מוצר</th>${chains.map(c => `<th style="--c:${c.color}">${c.short}</th>`).join('')}</tr></thead><tbody>
+    ${b.rows.map(r => `<tr><th>${tileArt(r.item, true)}<span>${esc(r.item.name)}${r.item.qty > 1 ? ` ×${r.item.qty}` : ''}</span></th>${chains.map(c => {
+      const x = r.cells[c.id], res = (C.prices[r.item.id] || {})[c.id] || [];
+      if (!x) return '<td class="none">לא נמצא</td>';
+      return `<td class="${x.total === r.min ? 'min' : ''}"><div class="price">${money(x.total)}</div>
+        ${x.unitPrice ? `<div class="pn">${money(x.unitPrice.value)} ${esc(x.unitPrice.per)}</div>` : ''}${x.promo ? `<div class="promo">🏷️ ${esc(x.promo)}</div>` : ''}
+        ${res.length > 1 ? `<select data-pref="${r.item.id}|${c.id}" aria-label="מוצר אחר ב${c.name}">${res.map(o => `<option value="${esc(o.name)}"${o.name === x.name ? ' selected' : ''}>${esc(o.name)} – ${money(o.price)}</option>`).join('')}</select>` : `<div class="pn">${esc(x.name)}</div>`}</td>`;
+    }).join('')}</tr>`).join('')}</tbody></table></div>`;
+  const upd = C.updated ? new Date(C.updated) : null;
+  return head + `<p class="checked">מחירי הסניפים מ-${upd ? `${upd.getDate()}/${upd.getMonth() + 1}` : '?'} · נבדק ${ago(C.at)}${stale ? ' · <b>הרשימה השתנתה מאז</b>' : ''}</p>` + btn + rec + `<div class="chains">${cards}</div>` + table +
+    `<p class="note">המחירים מקבצי שקיפות המחירים של כל סניף. מבצעי מועדון ומחירים בקופה יכולים להיות שונים. אפשר לבחור מוצר אחר בכל תא.</p>`;
+}
+
+// ---------- המסלול בסניף: סדר האזורים (נלמד מהקניות, אפשר לסדר ידנית) ----------
+// אין מפות רשמיות של הסניפים. ברירת המחדל = סדר נפוץ בסופר; בכל קנייה בסניף נרשם הסדר שבו המוצרים נכנסו לסל, והמסלול מתעדכן.
+const DEFAULT_ROUTE = ['veg', 'bread', 'meat', 'fridge', 'frozen', 'pantry', 'drinks', 'home', 'pharm', 'tools'];
+export function routeOf(storeId) {
+  const saved = storeId && S.prefs['route|' + storeId] && S.prefs['route|' + storeId].order;
+  const order = (saved || DEFAULT_ROUTE).filter(c => CATS.some(x => x.id === c));
+  for (const c of CATS) if (!order.includes(c.id)) order.push(c.id);
+  return order;
+}
+// מיזוג: 60% הסדר הקיים, 40% הסדר שבו קנו הפעם
+export function learnRoute(order, trail) {
+  if (!trail || trail.length < 2) return order;
+  const first = []; for (const c of trail) if (!first.includes(c)) first.push(c);
+  const pos = (arr, c) => arr.indexOf(c) / Math.max(1, arr.length - 1);
+  return [...order].map(c => ({ c, p: first.includes(c) ? 0.6 * pos(order, c) + 0.4 * pos(first, c) : pos(order, c) }))
+    .sort((a, b) => a.p - b.p).map(x => x.c);
+}
+function routeMap(list, order) {
+  const stops = order.map(c => ({ c: catOf(c), n: list.filter(i => i.cat === c && !i.got).length, all: list.filter(i => i.cat === c).length })).filter(x => x.all);
+  return `<ol class="route">${stops.map((x, k) => `<li class="${x.n ? '' : 'done'}" style="--c:${x.c.color}"><b>${k + 1}</b><span>${x.c.icon}</span><small>${esc(x.c.name)}${x.n ? ` · ${x.n}` : ' ✓'}</small></li>`).join('')}</ol>`;
+}
+function routeEditor(storeId) {
+  const order = routeOf(storeId);
+  const draw = (ord) => `<h3>✏️ סדר האזורים${storeId && branchOf(storeId) ? ` ב${branchOf(storeId).name}` : ''}</h3>
+    <p class="note">מהכניסה לסניף ועד הקופות. המסלול מתעדכן לבד גם לפי הסדר שבו אתם קונים.</p>
+    <ul class="list compact route-edit">${ord.map((c, k) => { const x = catOf(c); return `<li data-c="${c}"><b class="rnum">${k + 1}</b><span class="nm">${x.icon} ${esc(x.name)}</span>
+      <button type="button" class="icon" data-mv="-1" aria-label="למעלה"${k === 0 ? ' disabled' : ''}>↑</button><button type="button" class="icon" data-mv="1" aria-label="למטה"${k === ord.length - 1 ? ' disabled' : ''}>↓</button></li>`; }).join('')}</ul>
+    <div class="row-btns"><button class="btn primary" value="ok">שמירה</button><button class="btn" value="cancel" formnovalidate>ביטול</button><button class="btn ghost" value="reset" formnovalidate>חזרה לברירת המחדל</button></div>`;
+  let cur = [...order];
+  const form = sheet(draw(cur), (v) => {
+    if (!storeId) return;
+    if (v === 'ok') { S.prefs['route|' + storeId] = { order: cur, at: now() }; save(); render(); toast('המסלול נשמר'); }
+    if (v === 'reset') { S.prefs['route|' + storeId] = { order: DEFAULT_ROUTE, at: now() }; save(); render(); }
+  });
+  form.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mv]'); if (!b) return;
+    const c = b.closest('li').dataset.c, k = cur.indexOf(c), j = k + Number(b.dataset.mv);
+    if (j < 0 || j >= cur.length) return;
+    [cur[k], cur[j]] = [cur[j], cur[k]];
+    form.innerHTML = draw(cur);
+  });
+}
+function chooseStore() {
+  sheet(`<h3>🛒 איפה קונים?</h3><p class="note">לפי הסניף נבנה המסלול – באיזה סדר לעבור בין האזורים.</p>
+    <div class="store-pick">${BRANCHES.map(b => `<button class="btn" value="${b.id}" style="--c:${b.color}">${esc(b.name)}</button>`).join('')}<button class="btn ghost" value="other">סופר אחר</button></div>
+    <div class="row-btns"><button class="btn ghost" value="cancel" formnovalidate>ביטול</button></div>`,
+  (v) => { if (v && v !== 'cancel') startShop(v); });
+}
 
 // ---------- זיהוי מה נקנה מצילום קבלה או מוצרים ----------
 // Claude דרך השרת של "מה שנקרא" (אותו אתר, המפתח שמור שם). כשהשרת של הקניות יחובר אפשר להעביר לכאן.

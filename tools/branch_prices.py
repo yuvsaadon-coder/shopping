@@ -17,6 +17,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
@@ -151,11 +152,19 @@ def shufersal_file(kind, store):
 # ---------- Cerberus (רמי לוי, אושר עד) ----------
 class Cerberus:
     def __init__(self, user):
-        self.ftp = ftplib.FTP_TLS('url.retail.publishedprices.co.il', timeout=120)
+        for attempt in range(4):   # כשל DNS רגעי קורה
+            try:
+                self.ftp = ftplib.FTP_TLS('url.retail.publishedprices.co.il', timeout=120)
+                break
+            except OSError as e:
+                if attempt == 3:
+                    raise
+                log(f'{user}: connect failed ({e}), retrying')
+                time.sleep(5 * (attempt + 1))
         self.ftp.trust_server_pasv_ipv4_address = True
         self.ftp.login(user, '')
         self.names = self.ftp.nlst()
-        log(f'{user}: {len(self.names)} files')
+        log(f'{user}: {len(self.names)} files; e.g. ' + ', '.join(sorted({re.sub(r'\d{8,}', '#', n) for n in self.names})[:12]))
 
     def fetch(self, name):
         buf = io.BytesIO()
@@ -163,15 +172,21 @@ class Cerberus:
         return buf.getvalue()
 
     def latest(self, prefix, store=None):
-        pat = re.compile(rf'^{prefix}\d{{13}}-(?:\d{{3}}-)?(\d{{3,4}})-(\d{{8,12}})', re.I) if store else re.compile(rf'^{prefix}\d{{13}}-(\d{{8,12}})', re.I)
+        # PriceFull7290058140886-001-039-202611190500.gz / Stores7290103152017-000-202611190000.xml / StoresFull...
         best = None
         for n in self.names:
-            m = pat.match(n)
-            if not m:
+            if not n.lower().startswith(prefix.lower()):
                 continue
-            if store and int(m.group(1)) != int(store):
+            if prefix.lower() == 'price' and n.lower().startswith('pricefull'):
                 continue
-            stamp = m.group(2) if store else m.group(1)
+            nums = re.findall(r'\d+', n[len(prefix):])
+            if len(nums) < 2:
+                continue
+            stamp = max(nums[1:], key=len)   # התאריך – המספר הארוך אחרי מספר הרשת
+            if store is not None:
+                short = [x for x in nums[1:] if x != stamp and len(x) <= 4]
+                if not short or int(short[-1]) != int(store):
+                    continue
             if not best or stamp > best[0]:
                 best = (stamp, n)
         return best and best[1]
@@ -179,7 +194,7 @@ class Cerberus:
     def stores(self):
         n = self.latest('Stores')
         if not n:
-            raise RuntimeError('no stores file')
+            raise RuntimeError('no stores file: ' + ', '.join(x for x in self.names if 'store' in x.lower())[:300])
         return records(parse_xml(self.fetch(n)), ['storeid', 'storename'])
 
     def file(self, kind, store):

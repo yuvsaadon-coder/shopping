@@ -32,4 +32,8 @@ class FakeCerb(bp.Cerberus):
 c = FakeCerb(['PriceFull7290058140886-001-039-202611180500.gz', 'PriceFull7290058140886-001-039-202611190500.gz', 'PriceFull7290058140886-001-040-202611200500.gz', 'Stores7290058140886-202611190500.xml'])
 assert c.latest('PriceFull', '39') == 'PriceFull7290058140886-001-039-202611190500.gz'
 assert c.latest('Stores') == 'Stores7290058140886-202611190500.xml'
+c2 = FakeCerb(['StoresFull7290103152017-000-202611190000.xml', 'PriceFull7290103152017-001-202611190000.gz', 'PriceFull7290103152017-012-202611190000.gz', 'PromoFull7290103152017-012-202611190000.gz'])
+assert c2.latest('Stores') == 'StoresFull7290103152017-000-202611190000.xml'
+assert c2.latest('PriceFull', '12') == 'PriceFull7290103152017-012-202611190000.gz'
+assert c2.latest('PriceFull', '1') == 'PriceFull7290103152017-001-202611190000.gz'
 print('branch prices: ok')
