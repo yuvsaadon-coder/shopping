@@ -122,6 +122,11 @@ const server = { scanCalls: [], list: null, compare: null, priceCalls: [], advic
 const PRICES = {   // קרפור לא מוצאת ביצים
   'ביצים L': { shufersal: 30, rami: 26, hazi: 25 }, 'טופו': { shufersal: 12, rami: 10, carrefour: 11, hazi: 13 }, 'עגבניות שרי': { shufersal: 9, rami: 8, carrefour: 10, hazi: 9 }
 };
+const BRANCH_DATA = {
+  index: { updated: '2026-10-13T03:20+00:00', branches: [{ id: 'rami-talpiot' }, { id: 'shufersal-nayot' }] },
+  'rami-talpiot': { updated: '2026-10-13T03:20+00:00', items: [['טופו טבעי 300 גרם', 9.9, '300 גרם', '3.30 ל100 גרם', '2 ב-18'], ['ביצים L 12 יח', 24, '12 יח', '', ''], ['עגבניות שרי ארוז', 8, '', '', ''], ['שום', 5, '', '', ''], ['שוקולד חלב', 6, '', '', '']] },
+  'shufersal-nayot': { updated: '2026-10-13T03:20+00:00', items: [['טופו', 12.9, '', '', ''], ['ביצים L', 26, '', '', ''], ['עגבניות שרי', 9, '', '', '']] }
+};
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
 async function mock(ctx) {
   await ctx.route('https://shopping123.yuvsaadon.workers.dev/**', async (route) => {
@@ -162,6 +167,11 @@ async function mock(ctx) {
     return route.fulfill({ json: { stop_reason: 'end_turn', content: [{ type: 'text', text }] }, headers: cors });
   });
   await ctx.route('https://img.example/**', r => r.fulfill({ body: PNG, contentType: 'image/png' }));
+  // מחירי הסניפים (בפועל: data/branches/*.json שנבנה כל בוקר מקבצי שקיפות המחירים)
+  await ctx.route(/\/data\/branches\/.+\.json/, r => {
+    const name = new URL(r.request().url()).pathname.split('/').pop().replace('.json', '');
+    return BRANCH_DATA[name] ? r.fulfill({ json: BRANCH_DATA[name] }) : r.fulfill({ status: 404, body: '' });
+  });
 }
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const errors = [];
@@ -328,6 +338,11 @@ assert.match(await a.locator('.chain.best').textContent(), /רמי לוי[\s\S]*
 await a.getByRole('button', { name: /הרשימה/ }).click();
 assert.equal(await count(a), '5');
 await a.getByRole('button', { name: /אני בקניות/ }).click();
+await a.locator('#sheet').getByRole('button', { name: 'רמי לוי תלפיות' }).click();
+assert.match(await a.locator('.shop-hero').textContent(), /בקניות · רמי לוי תלפיות/);
+// המסלול בסניף: האזורים לפי הסדר (ברירת מחדל: ירקות ופירות קודם)
+assert.match(await a.locator('.route').textContent(), /^1🥬ירקות ופירות · 2[\s\S]*2🥛מקרר · 2[\s\S]*3🫙מזווה · 1/);
+assert.match(await a.locator('h2.stop').first().textContent(), /1 🥬 ירקות ופירות/);
 await a.locator('[data-cart="tofu"]').click();
 await a.locator('li', { hasText: 'במבה' }).locator('[data-cart]').click();
 assert.match(await a.locator('.shop-hero').textContent(), /2 בסל · 3 נשארו/);
@@ -338,6 +353,30 @@ await a.getByRole('button', { name: /סיום קניות \(2\)/ }).click();
 await a.locator('#sheet').getByRole('button', { name: 'אישור – קניתי' }).click();
 await waitCount(a, '3');
 assert.equal(await a.locator('[data-toggle]', { hasText: 'במבה' }).count(), 0, 'one-time product is gone after buying');
+// המסלול נלמד: קנו קודם במקרר ואז במזווה, אז המקרר עולה לפני הבשר
+const learned = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).prefs['route|rami-talpiot'].order);
+assert.ok(learned.indexOf('fridge') < learned.indexOf('meat') && learned[0] === 'veg', learned.join(','));
+// השוואה בין סניפים: ביצים ×2: רמי לוי תלפיות 48+8+5 מול שופרסל ניות 52+9 + שום שאין שם
+await a.getByRole('button', { name: /איפה זול/ }).click();
+await a.locator('[data-cmp-mode="branch"]').click();
+await a.getByRole('button', { name: /השוואה בין הסניפים ל-3 מוצרים/ }).click();
+await a.locator('.rec').waitFor();
+assert.match(await a.locator('.rec').textContent(), /הכי משתלם: רמי לוי תלפיות[\s\S]*בערך ₪61 על מה שנמצא · זול ב-₪5 משופרסל ניות/);
+assert.match(await a.locator('tr', { hasText: 'ביצים' }).locator("td").first().textContent(), /₪48/);
+assert.match(await a.locator('tr', { hasText: 'שום' }).textContent(), /לא נמצא/);
+await a.getByRole('button', { name: /יוצאים לקניות ברמי לוי תלפיות/ }).click();
+assert.match(await a.locator('.shop-hero').textContent(), /רמי לוי תלפיות/);
+// עריכת סדר האזורים בסניף
+await a.locator('[data-route-edit]').click();
+await a.locator('#sheet li[data-c="fridge"] [data-mv="-1"]').click();
+await a.locator('#sheet').getByRole('button', { name: 'שמירה' }).click();
+await a.locator('#toast', { hasText: 'המסלול נשמר' }).waitFor();
+const edited = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).prefs['route|rami-talpiot'].order);
+assert.equal(edited.indexOf('fridge'), learned.indexOf('fridge') - 1);
+await a.getByRole('button', { name: 'יציאה בלי לסיים' }).click();
+await a.getByRole('button', { name: /איפה זול/ }).click();
+await a.locator('[data-cmp-mode="online"]').click();
+await a.getByRole('button', { name: /הרשימה/ }).click();
 const tofuHist = await a.evaluate(() => JSON.parse(localStorage.getItem('shop-state-v2')).items.tofu.hist.length);
 assert.ok(tofuHist > 5, 'purchase recorded in the history');
 await b.locator('.banner', { hasText: 'בקניות עכשיו' }).waitFor({ state: 'detached', timeout: 15000 });

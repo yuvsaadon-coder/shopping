@@ -253,8 +253,13 @@ function shopView(list) {
   const todo = list.filter(i => !i.got), cart = list.filter(i => i.got);
   const row = (i) => `<li class="${i.got ? 'got' : ''}"><button class="shop-row" data-cart="${i.id}" aria-pressed="${!!i.got}">
       <span class="tick">${i.got ? '✓' : ''}</span>${tileArt(i, true)}<span class="nm">${esc(i.name)}${i.qty > 1 ? ` ×${i.qty}` : ''}${i.note ? `<small>${esc(i.note)}</small>` : ''}</span></button></li>`;
-  return `<section class="hero shop-hero"><h1>🛒 בקניות</h1><p>${cart.length} בסל · ${todo.length} נשארו</p></section>
-    ${todo.length ? groupByStore(todo, row) : '<p class="note done-note">הכול בסל! 🎉</p>'}
+  const order = routeOf(S.shopAt);
+  const br = branchOf(S.shopAt);
+  const byRoute = order.map(c => ({ c: catOf(c), l: todo.filter(i => i.cat === c) })).filter(g => g.l.length)
+    .map((g, k) => `<h2 class="cat stop" style="--c:${g.c.color}"><b>${k + 1}</b> ${g.c.icon} ${esc(g.c.name)}</h2><ul class="list">${g.l.map(row).join('')}</ul>`).join('');
+  return `<section class="hero shop-hero"><h1>🛒 בקניות${br ? ` · ${esc(br.short)}` : ''}</h1><p>${cart.length} בסל · ${todo.length} נשארו</p></section>
+    <div class="route-box">${routeMap(list, order)}${br ? `<button class="linkish" data-route-edit="${br.id}">✏️ סדר האזורים בסניף</button>` : ''}</div>
+    ${todo.length ? byRoute : '<p class="note done-note">הכול בסל! 🎉</p>'}
     ${cart.length ? `<h2 class="cat">בסל (${cart.length})</h2><ul class="list">${cart.map(row).join('')}</ul>` : ''}
     <div class="checkout"><button class="btn primary wide big" data-checkout>סיום קניות${cart.length ? ` (${cart.length})` : ''}</button><button class="btn ghost" data-stop-shop>יציאה בלי לסיים</button></div>`;
 }
@@ -284,14 +289,17 @@ function checkout() {
     if (v !== 'ok') return;
     const ids = [...form.querySelectorAll('input[name=b]:checked')].map(x => x.value);
     for (const id of ids) bought(id);
+    if (branchOf(S.shopAt) && (S.trail || []).length > 1) S.prefs['route|' + S.shopAt] = { order: learnRoute(routeOf(S.shopAt), S.trail), at: now() };
     for (const i of cart) if (!ids.includes(i.id)) S.items[i.id] = { ...S.items[i.id], got: false, at: now() };
     stopShop(false);
     toast(ids.length === 1 ? 'מוצר אחד נרשם כנקנה' : `${ids.length} מוצרים נרשמו כנקנו`);
   });
 }
-function startShop() {
+function startShop(storeId) {
+  if (!storeId) { chooseStore(); return; }
   S.mode = 'shop';
-  S.meta.shopping = { by: me(), active: true, kind: 'shop', at: now() };
+  S.shopAt = storeId; S.trail = [];
+  S.meta.shopping = { by: me(), active: true, kind: 'shop', store: branchOf(storeId) ? branchOf(storeId).name : '', at: now() };
   view = 'list'; S.view = view; save(); render(); scrollTo(0, 0);
 }
 function stopShop(keepCart = true) {
@@ -493,6 +501,11 @@ async function runCompare() {
 }
 
 function compareView() {
+  const mode = S.cmpMode === 'branch' ? 'branch' : 'online';
+  const tabs = `<div class="tabs" role="tablist"><button role="tab" data-cmp-mode="online" aria-selected="${mode === 'online'}">🌐 משלוח אונליין</button><button role="tab" data-cmp-mode="branch" aria-selected="${mode === 'branch'}">🏬 קנייה בסניף</button></div>`;
+  return tabs + (mode === 'branch' ? branchView() : onlineView());
+}
+function onlineView() {
   const list = superNeeded();
   const head = `<section class="hero"><h1>איפה כדאי להזמין?</h1><p>שופרסל · רמי לוי · קרפור · חצי חינם · החישוק</p></section>`;
   if (comparing) return head + (comparing.stage === 'prices'
@@ -1010,8 +1023,16 @@ document.addEventListener('click', (e) => {
   else if (d.add !== undefined) openEditor('new', d.add);
   else if (d.edit) openEditor(d.edit);
   else if (d.qty) { const i = S.items[d.qty]; touch(d.qty, { qty: Math.max(1, Math.min(99, (i.qty || 1) + Number(d.d))) }); }
-  else if (d.cart) { const i = S.items[d.cart]; touch(d.cart, { got: !i.got }); if (navigator.vibrate) navigator.vibrate(10); }
+  else if (d.cart) {
+    const i = S.items[d.cart];
+    if (!i.got) { S.trail = S.trail || []; if (S.trail[S.trail.length - 1] !== i.cat) S.trail.push(i.cat); }
+    touch(d.cart, { got: !i.got }); if (navigator.vibrate) navigator.vibrate(10);
+  }
   else if ('startShop' in d) startShop();
+  else if (d.startShopAt) startShop(d.startShopAt);
+  else if (d.routeEdit) routeEditor(d.routeEdit);
+  else if (d.cmpMode) { S.cmpMode = d.cmpMode; save(false); render(); }
+  else if ('branchCompare' in d) runBranchCompare();
   else if ('stopShop' in d) stopShop();
   else if ('checkout' in d) checkout();
   else if ('startDelivery' in d) startDelivery();

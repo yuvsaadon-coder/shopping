@@ -24,6 +24,11 @@
 - **צילום קבלה / מוצרים** (`runScan` → `receiptSheet`): בסיום קניות, בבדיקת משלוח, וב"קניתי – סריקת קבלה" ברשימה. התמונות מוקטנות במכשיר ונשלחות ל-Claude (`claude-opus-5`, structured output) **דרך השרת של "מה שנקרא"** (`AI_SERVER`, `/v1/messages`, אותו אתר ב-CORS; נספר במכסה היומית שלו, 150). Claude מתאים כל שורה ל-id ברשימת המוצרים; מאשרים או מתקנים; מחיר מהקבלה נשמר ב-`item.prices`.
 - `now()` עולה תמיד (גם באותה אלפית שנייה), כדי שהשינוי האחרון ינצח במיזוג.
 
+## סניפים (מחירים בסניף ומסלול)
+- **הנתונים:** `tools/branch_prices.py` רץ ב-workflow של Pages (כל בוקר + בכל push): קבצי שקיפות המחירים (חוק המזון) – שופרסל מ-prices.shufersal.co.il, רמי לוי ואושר עד מ-FTP של publishedprices (משתמש בלי סיסמה). מוצא את מספר הסניף לפי מילים בשם, ומפרסם `data/branches/<id>.json` (`items: [שם, מחיר, יחידה, מחיר ליחידה, מבצע]`) + `index.json`. לא נשמר במאגר (`.gitignore`), רק בארטיפקט של Pages. נמצאו: שופרסל דיל תלפיות (45), שופרסל שלי ניות (42).
+- **באפליקציה:** טאב "קנייה בסניף" במסך ההשוואה (`branchView`, `runBranchCompare`, `searchCatalog` – התאמת מילים בקטלוג הסניף). `basket`/`orderPlan` מקבלים רשימת "רשתות" (כאן סניפים, בלי משלוח ובלי פיצול).
+- **מסלול בסניף:** אין מפות רשמיות לסניפים. "אני בקניות" שואל באיזה סניף (`chooseStore`); הרשימה מסודרת לפי `routeOf(סניף)` – ברירת מחדל `DEFAULT_ROUTE`, נלמד מהסדר שבו מוצרים נכנסו לסל (`S.trail` → `learnRoute`, 60/40) ונשמר ב-`S.prefs['route|<סניף>']`; אפשר לסדר ידנית (`routeEditor`).
+
 ## השרת (`worker/worker.js`, Cloudflare Worker `shopping123`)
 - `/list`, `/compare` – ב-KV `LIBRARY` (משותף עם "מה שנקרא"; מפתחות `shoplist:*`).
 - `/prices` – מפענחים לכל רשת (`parseShufersal`, `parseRami`, `parseHtmlProducts`), `parseSize`/`unitPrice` למחיר ליחידה, `promoText` למבצעים. מטמון 30 דקות, `fresh=1` עוקף.
