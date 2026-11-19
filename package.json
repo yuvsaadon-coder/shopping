@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node tests/test.mjs",
+    "test": "python3 tests/branch_prices_test.py && node tests/test.mjs",
     "icons": "node tools/icons.mjs"
   },
   "devDependencies": {

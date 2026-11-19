@@ -3,6 +3,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  # מחירי הסניפים מתעדכנים כל בוקר (קבצי שקיפות המחירים מתפרסמים בלילה)
+  schedule:
+    - cron: '17 3 * * *'
 permissions:
   contents: read
   pages: write
@@ -18,6 +21,10 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - name: מחירים לפי סניף (קבצי שקיפות המחירים)
+        continue-on-error: true
+        timeout-minutes: 20
+        run: python3 tools/branch_prices.py
       - uses: actions/configure-pages@v5
         with:
           enablement: true
